@@ -1,6 +1,6 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  21 February 2023                                                *
+* Date      :  8 April 2023                                                    *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  Core Clipper Library structures and functions                   *
@@ -10,6 +10,7 @@
 #ifndef CLIPPER_CORE_H
 #define CLIPPER_CORE_H
 
+#include <cstdint>
 #include <cstdlib>
 #include <cmath>
 #include <vector>
@@ -28,7 +29,7 @@ namespace Clipper2Lib
   public:
     explicit Clipper2Exception(const char* description) :
       m_descr(description) {}
-    virtual const char* what() const throw() { return m_descr.c_str(); }
+    virtual const char* what() const throw() override { return m_descr.c_str(); }
   private:
     std::string m_descr;
   };
@@ -49,7 +50,9 @@ namespace Clipper2Lib
   const int non_pair_error_i    = 4; // non-fatal 
   const int range_error_i = 64;
 
+#ifndef PI
   static const double PI = 3.141592653589793238;
+#endif
   static const int64_t MAX_COORD = INT64_MAX >> 2;
   static const int64_t MIN_COORD = -MAX_COORD;
   static const int64_t INVALID = INT64_MAX;
@@ -57,7 +60,6 @@ namespace Clipper2Lib
   const double min_coord = static_cast<double>(MIN_COORD);
 
   static const double MAX_DBL = (std::numeric_limits<double>::max)();
-  static const double MIN_DBL = (std::numeric_limits<double>::min)();
 
   static void DoError(int error_code)
   {
@@ -338,68 +340,43 @@ namespace Clipper2Lib
 
   static const Rect64 MaxInvalidRect64 = Rect64(
     INT64_MAX, INT64_MAX, INT64_MIN, INT64_MIN);
-
   static const RectD MaxInvalidRectD = RectD(
-    MAX_DBL, MAX_DBL, MIN_DBL, MIN_DBL);
+    MAX_DBL, MAX_DBL, -MAX_DBL, -MAX_DBL);
 
-  inline Rect64 GetBounds(const Path64& path)
+  template <typename T>
+  Rect<T> GetBounds(const Path<T>& path)
   {
-    Rect64 rec = MaxInvalidRect64;
-    for (const Point64& pt : path)
+    auto xmin = std::numeric_limits<T>::max();
+    auto ymin = std::numeric_limits<T>::max();
+    auto xmax = std::numeric_limits<T>::lowest();
+    auto ymax = std::numeric_limits<T>::lowest();
+    for (const auto& p : path)
     {
-      if (pt.x < rec.left) rec.left = pt.x;
-      if (pt.x > rec.right) rec.right = pt.x;
-      if (pt.y < rec.top) rec.top = pt.y;
-      if (pt.y > rec.bottom) rec.bottom = pt.y;
+      if (p.x < xmin) xmin = p.x;
+      if (p.x > xmax) xmax = p.x;
+      if (p.y < ymin) ymin = p.y;
+      if (p.y > ymax) ymax = p.y;
     }
-    if (rec.left == INT64_MAX) return Rect64();
-    return rec;
+    return Rect<T>(xmin, ymin, xmax, ymax);
   }
 
-  inline Rect64 GetBounds(const Paths64& paths)
+  template <typename T>
+  Rect<T> GetBounds(const Paths<T>& paths)
   {
-    Rect64 rec = MaxInvalidRect64;
-    for (const Path64& path : paths)
-      for (const Point64& pt : path)
+    auto xmin = std::numeric_limits<T>::max();
+    auto ymin = std::numeric_limits<T>::max();
+    auto xmax = std::numeric_limits<T>::lowest();
+    auto ymax = std::numeric_limits<T>::lowest();
+    for (const Path<T>& path : paths)
+      for (const Point<T>& p : path)
       {
-        if (pt.x < rec.left) rec.left = pt.x;
-        if (pt.x > rec.right) rec.right = pt.x;
-        if (pt.y < rec.top) rec.top = pt.y;
-        if (pt.y > rec.bottom) rec.bottom = pt.y;
+      if (p.x < xmin) xmin = p.x;
+      if (p.x > xmax) xmax = p.x;
+      if (p.y < ymin) ymin = p.y;
+      if (p.y > ymax) ymax = p.y;
       }
-    if (rec.left == INT64_MAX) return Rect64();
-    return rec;
+    return Rect<T>(xmin, ymin, xmax, ymax);
   }
-
-  inline RectD GetBounds(const PathD& path)
-  {
-    RectD rec = MaxInvalidRectD;
-    for (const PointD& pt : path)
-    {
-      if (pt.x < rec.left) rec.left = pt.x;
-      if (pt.x > rec.right) rec.right = pt.x;
-      if (pt.y < rec.top) rec.top = pt.y;
-      if (pt.y > rec.bottom) rec.bottom = pt.y;
-    }
-    if (rec.left == MAX_DBL) return RectD();
-    return rec;
-  }
-
-  inline RectD GetBounds(const PathsD& paths)
-  {
-    RectD rec = MaxInvalidRectD;
-    for (const PathD& path : paths)
-      for (const PointD& pt : path)
-      {
-        if (pt.x < rec.left) rec.left = pt.x;
-        if (pt.x > rec.right) rec.right = pt.x;
-        if (pt.y < rec.top) rec.top = pt.y;
-        if (pt.y > rec.bottom) rec.bottom = pt.y;
-      }
-    if (rec.left == MAX_DBL) return RectD();
-    return rec;
-  }
-
 
   template <typename T>
   std::ostream& operator << (std::ostream& outstream, const Path<T>& path)
@@ -451,7 +428,7 @@ namespace Clipper2Lib
   }
 
   template <typename T1, typename T2>
-  inline Path<T1> ScalePath(const Path<T2>& path, 
+  inline Path<T1> ScalePath(const Path<T2>& path,
     double scale, int& error_code)
   {
     return ScalePath<T1, T2>(path, scale, scale, error_code);
@@ -583,38 +560,22 @@ namespace Clipper2Lib
   }
 
   template<typename T>
-  inline Path<T> StripDuplicates(const Path<T>& path, bool is_closed_path)
+  inline void StripDuplicates( Path<T>& path, bool is_closed_path)
   {
-    if (path.size() == 0) return Path<T>();
-    Path<T> result;
-    result.reserve(path.size());
-    typename Path<T>::const_iterator path_iter = path.cbegin();
-    Point<T> first_pt = *path_iter++, last_pt = first_pt;
-    result.push_back(first_pt);
-    for (; path_iter != path.cend(); ++path_iter)
-    {
-      if (*path_iter != last_pt)
-      {
-        last_pt = *path_iter;
-        result.push_back(last_pt);
-      }
-    }
-    if (!is_closed_path) return result;
-    while (result.size() > 1 && result.back() == first_pt) result.pop_back();
-    return result;
+    //https://stackoverflow.com/questions/1041620/whats-the-most-efficient-way-to-erase-duplicates-and-sort-a-vector#:~:text=Let%27s%20compare%20three%20approaches%3A
+    path.erase(std::unique(path.begin(), path.end()),path.end());
+    if (is_closed_path)
+      while (path.size() > 1 && path.back() == path.front()) path.pop_back();
   }
 
   template<typename T>
-  inline Paths<T> StripDuplicates(const Paths<T>& paths, bool is_closed_path)
+  inline void StripDuplicates( Paths<T>& paths, bool is_closed_path)
   {
-    Paths<T> result;
-    result.reserve(paths.size());
-    for (typename Paths<T>::const_iterator paths_citer = paths.cbegin();
-      paths_citer != paths.cend(); ++paths_citer)
+    for (typename Paths<T>::iterator paths_citer = paths.begin();
+      paths_citer != paths.end(); ++paths_citer)
     {
-      result.push_back(StripDuplicates(*paths_citer, is_closed_path));
+      StripDuplicates(*paths_citer, is_closed_path);
     }
-    return result;
   }
 
   // Miscellaneous ------------------------------------------------------------

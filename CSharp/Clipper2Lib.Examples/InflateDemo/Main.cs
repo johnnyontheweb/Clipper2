@@ -6,11 +6,8 @@
 * License   :  http://www.boost.org/LICENSE_1_0.txt                            *
 *******************************************************************************/
 
-using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using Clipper2Lib;
 
 namespace ClipperDemo1
@@ -50,7 +47,7 @@ namespace ClipperDemo1
       p = Clipper.TranslatePaths(p, 120, 100);
       pp.AddRange(p);
       co.AddPaths(p, JoinType.Round, EndType.Joined);
-      p = co.Execute(20);
+      co.Execute(20, p);
       pp.AddRange(p);
 
       SvgWriter svg = new ();
