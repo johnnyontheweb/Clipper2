@@ -640,7 +640,7 @@ namespace Clipper2Lib
 
       foreach (Path64 p in group.inPaths)
       {
-        Path64 path = p; //Clipper.StripDuplicates(p, isJoined);
+        Path64 path = Clipper.StripDuplicates(p, isJoined);
         int cnt = path.Count;
         if ((cnt == 0) || ((cnt < 3) && (_endType == EndType.Polygon))) 
           continue;

@@ -18,8 +18,30 @@ namespace ClipperDemo1
 
     public static void Main()
     {
-      DoSimpleShapes();
-      DoRabbit();
+      // DoSimpleShapes();
+      // DoRabbit();
+      GitHubSample();
+    }
+
+    public static void GitHubSample()
+    {
+      Paths64 subject = new();
+      subject.Add(Clipper.MakePath(new int[] { -250000, -145000, -250000, 145000, 250000, 145000, 250000, -145000, -250000, -145000 }));
+      //subject.Add(Clipper.MakePath(new int[] { -250000, -145000, -250000, 145000, 250000, 145000, 250000, -145000 }));
+
+      Paths64 solution = Clipper.InflatePaths(subject, 20000, JoinType.Miter, EndType.Polygon);
+      SvgWriter svg = new SvgWriter();
+      SvgUtils.AddSubject(svg, subject);
+      SvgUtils.AddSolution(svg, solution, false);
+      SvgUtils.SaveToFile(svg, "miter.svg", FillRule.NonZero, 400, 400, 10);
+      ClipperFileIO.OpenFileWithDefaultApp("miter.svg");
+
+      solution = Clipper.InflatePaths(subject, 20000, JoinType.Square, EndType.Polygon);
+      svg.ClearAll();
+      SvgUtils.AddSubject(svg, subject);
+      SvgUtils.AddSolution(svg, solution, false);
+      SvgUtils.SaveToFile(svg, "square.svg", FillRule.NonZero, 400, 400, 10);
+      ClipperFileIO.OpenFileWithDefaultApp("square.svg");
     }
 
     public static void DoSimpleShapes()
