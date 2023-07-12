@@ -2,7 +2,7 @@ unit Clipper;
 
 (*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  21 April 2023                                                   *
+* Date      :  26 May 2023                                                     *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  This module provides a simple interface to the Clipper Library  *
@@ -96,23 +96,18 @@ function InflatePaths(const paths: TPathsD; delta: Double;
   ArcTolerance: double = 0.0): TPathsD; overload;
 
 // RectClip: for closed paths only (otherwise use RectClipLines)
-//           much faster when only clipping convex polygons
-function ExecuteRectClip(const rect: TRect64; const path: TPath64;
-  convexOnly: Boolean = false): TPath64; overload;
-function ExecuteRectClip(const rect: TRect64; const paths: TPaths64;
-  convexOnly: Boolean = false): TPaths64; overload;
-function ExecuteRectClip(const rect: TRectD; const path: TPathD;
-  convexOnly: Boolean = false; precision: integer = 2): TPathD; overload;
-function ExecuteRectClip(const rect: TRectD; const paths: TPathsD;
-  convexOnly: Boolean = false; precision: integer = 2): TPathsD; overload;
+function RectClip(const rect: TRect64; const path: TPath64): TPath64; overload;
+function RectClip(const rect: TRect64; const paths: TPaths64): TPaths64; overload;
+function RectClip(const rect: TRectD; const path: TPathD; precision: integer = 2): TPathD; overload;
+function RectClip(const rect: TRectD; const paths: TPathsD; precision: integer = 2): TPathsD; overload;
 
-function ExecuteRectClipLines(const rect: TRect64;
+function RectClipLines(const rect: TRect64;
   const path: TPath64): TPaths64; overload;
-function ExecuteRectClipLines(const rect: TRect64;
+function RectClipLines(const rect: TRect64;
   const paths: TPaths64): TPaths64; overload;
-function ExecuteRectClipLines(const rect: TRectD; const path: TPathD;
+function RectClipLines(const rect: TRectD; const path: TPathD;
   precision: integer = 2): TPathsD; overload;
-function ExecuteRectClipLines(const rect: TRectD; const paths: TPathsD;
+function RectClipLines(const rect: TRectD; const paths: TPathsD;
   precision: integer = 2): TPathsD; overload;
 
 function TranslatePath(const path: TPath64; dx, dy: Int64): TPath64; overload;
@@ -413,36 +408,34 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClip(const rect: TRect64;
-  const path: TPath64; convexOnly: Boolean): TPath64;
+function RectClip(const rect: TRect64;
+  const path: TPath64): TPath64;
 var
   paths: TPaths64;
 begin
   SetLength(paths, 1);
   paths[0] := path;
-  paths := ExecuteRectClip(rect, paths, convexOnly);
+  paths := RectClip(rect, paths);
   if Assigned(paths) then
     Result := paths[0] else
     Result := nil;
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClip(const rect: TRect64;
-  const paths: TPaths64; convexOnly: Boolean): TPaths64;
+function RectClip(const rect: TRect64; const paths: TPaths64): TPaths64;
 begin
   Result := nil;
   if rect.IsEmpty then Exit;
-  with TRectClip.Create(rect) do
+  with TRectClip64.Create(rect) do
   try
-    Result := Execute(paths, convexOnly);
+    Result := Execute(paths);
   finally
     Free;
   end;
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClip(const rect: TRectD; const path: TPathD;
-  convexOnly: Boolean; precision: integer): TPathD;
+function RectClip(const rect: TRectD; const path: TPathD; precision: integer): TPathD;
 var
   scale: double;
   tmpPath: TPath64;
@@ -454,13 +447,12 @@ begin
   scale := Math.Power(10, precision);
   rec := Rect64(ScaleRect(rect, scale));
   tmpPath := ScalePath(path, scale);
-  tmpPath := ExecuteRectClip(rec, tmpPath, convexOnly);
+  tmpPath := RectClip(rec, tmpPath);
   Result := ScalePathD(tmpPath, 1/scale);
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClip(const rect: TRectD; const paths: TPathsD;
-  convexOnly: Boolean; precision: integer): TPathsD;
+function RectClip(const rect: TRectD; const paths: TPathsD; precision: integer): TPathsD;
 var
   scale: double;
   tmpPaths: TPaths64;
@@ -471,7 +463,7 @@ begin
   rec := Rect64(ScaleRect(rect, scale));
 
   tmpPaths := ScalePaths(paths, scale);
-  with TRectClip.Create(rec) do
+  with TRectClip64.Create(rec) do
   try
     tmpPaths := Execute(tmpPaths);
   finally
@@ -481,14 +473,14 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClipLines(const rect: TRect64; const path: TPath64): TPaths64;
+function RectClipLines(const rect: TRect64; const path: TPath64): TPaths64;
 var
   tmp: TPaths64;
 begin
   Result := nil;
   SetLength(tmp, 1);
   tmp[0] := path;
-  with TRectClipLines.Create(rect) do
+  with TRectClipLines64.Create(rect) do
   try
     Result := Execute(tmp);
   finally
@@ -497,11 +489,11 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClipLines(const rect: TRect64; const paths: TPaths64): TPaths64;
+function RectClipLines(const rect: TRect64; const paths: TPaths64): TPaths64;
 begin
   Result := nil;
   if rect.IsEmpty then Exit;
-  with TRectClipLines.Create(rect) do
+  with TRectClipLines64.Create(rect) do
   try
     Result := Execute(paths);
   finally
@@ -510,7 +502,7 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClipLines(const rect: TRectD;
+function RectClipLines(const rect: TRectD;
   const path: TPathD; precision: integer): TPathsD;
 var
   scale: double;
@@ -524,12 +516,12 @@ begin
   scale := Math.Power(10, precision);
   rec := Rect64(ScaleRect(rect, scale));
   tmpPath := ScalePath(path, scale);
-  tmpPaths := ExecuteRectClipLines(rec, tmpPath);
+  tmpPaths := RectClipLines(rec, tmpPath);
   Result := ScalePathsD(tmpPaths, 1/scale);
 end;
 //------------------------------------------------------------------------------
 
-function ExecuteRectClipLines(const rect: TRectD; const paths: TPathsD;
+function RectClipLines(const rect: TRectD; const paths: TPathsD;
   precision: integer = 2): TPathsD;
 var
   scale: double;
@@ -542,7 +534,7 @@ begin
   scale := Math.Power(10, precision);
   rec := Rect64(ScaleRect(rect, scale));
   tmpPaths := ScalePaths(paths, scale);
-  with TRectClipLines.Create(rec) do
+  with TRectClipLines64.Create(rec) do
   try
     tmpPaths := Execute(tmpPaths);
   finally
