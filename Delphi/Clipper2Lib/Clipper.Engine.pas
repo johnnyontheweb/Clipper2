@@ -2,7 +2,7 @@ unit Clipper.Engine;
 
 (*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  19 July 2023                                                    *
+* Date      :  19 October 2023                                                 *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  This is the main polygon clipping module                        *
@@ -96,6 +96,7 @@ type
     pts      : POutPt;
     polypath : TPolyPathBase;
     splits   : TOutRecArray;
+    recursiveCheck : POutRec;
     bounds   : TRect64;
     path     : TPath64;
     isOpen   : Boolean;
@@ -633,6 +634,15 @@ begin
 end;
 //------------------------------------------------------------------------------
 
+function IsValidOwner(outRec, TestOwner: POutRec): Boolean;
+ {$IFDEF INLINING} inline; {$ENDIF}
+begin
+  while Assigned(TestOwner) and (outrec <> TestOwner) do
+    TestOwner := TestOwner.owner;
+  Result := not Assigned(TestOwner);
+end;
+//------------------------------------------------------------------------------
+
 function PtsReallyClose(const pt1, pt2: TPoint64): Boolean;
   {$IFDEF INLINING} inline; {$ENDIF}
 begin
@@ -816,25 +826,49 @@ begin
 end;
 //------------------------------------------------------------------------------
 
-function GetBounds(op: POutPt): TRect64;
+function PointCount(pts: POutPt): Integer; {$IFDEF INLINING} inline; {$ENDIF}
 var
-  op2: POutPt;
+  p: POutPt;
 begin
-  result.Left := op.pt.X;
-  result.Right := op.pt.X;
-  result.Top := op.pt.Y;
-  result.Bottom := op.pt.Y;
-  op2 := op.next;
-  while op2 <> op do
-  begin
-    if op2.pt.X < result.Left then result.Left := op2.pt.X
-    else if op2.pt.X > result.Right then result.Right := op2.pt.X;
-    if op2.pt.Y < result.Top then result.Top := op2.pt.Y
-    else if op2.pt.Y > result.Bottom then result.Bottom := op2.pt.Y;
-    op2 := op2.next;
-  end;
+  Result := 0;
+  if not Assigned(pts) then Exit;
+  p := pts;
+  repeat
+    Inc(Result);
+    p := p.next;
+  until p = pts;
 end;
 //------------------------------------------------------------------------------
+
+function GetCleanPath(op: POutPt): TPath64;
+var
+  cnt: integer;
+  op2, prevOp: POutPt;
+begin
+  cnt := 0;
+  SetLength(Result, PointCount(op));
+  op2 := op;
+  while ((op2.next <> op) and
+    (((op2.pt.X = op2.next.pt.X) and (op2.pt.X = op2.prev.pt.X)) or
+    ((op2.pt.Y = op2.next.pt.Y) and (op2.pt.Y = op2.prev.pt.Y)))) do
+      op2 := op2.next;
+  result[cnt] := op2.pt;
+  inc(cnt);
+  prevOp := op2;
+  op2 := op2.next;
+  while (op2 <> op) do
+  begin
+    if (((op2.pt.X <> op2.next.pt.X) or (op2.pt.X <> prevOp.pt.X)) and
+      ((op2.pt.Y <> op2.next.pt.Y) or (op2.pt.Y <> prevOp.pt.Y))) then
+    begin
+      result[cnt] := op2.pt;
+      inc(cnt);
+      prevOp := op2;
+    end;
+    op2 := op2.next;
+  end;
+  SetLength(Result, cnt);
+end;
 
 function PointInOpPolygon(const pt: TPoint64; op: POutPt): TPointInPolygonResult;
 var
@@ -909,6 +943,8 @@ end;
 function Path1InsidePath2(const op1, op2: POutPt): Boolean;
 var
   op: POutPt;
+  mp: TPoint64;
+  path: TPath64;
   pipResult: TPointInPolygonResult;
   outsideCnt: integer;
 begin
@@ -923,24 +959,16 @@ begin
     else if pipResult = pipInside then dec(outsideCnt);
     op := op.next;
   until (op = op1) or (Abs(outsideCnt) = 2);
-  // if path1's location is still equivocal then check its midpoint
-  if Abs(outsideCnt) > 1 then
-    Result := outsideCnt < 0 else
-    Result := PointInOpPolygon(GetBounds(op).MidPoint, op2) = pipInside;
-end;
-//------------------------------------------------------------------------------
-
-function PointCount(pts: POutPt): Integer; {$IFDEF INLINING} inline; {$ENDIF}
-var
-  p: POutPt;
-begin
-  Result := 0;
-  if not Assigned(pts) then Exit;
-  p := pts;
-  repeat
-    Inc(Result);
-    p := p.next;
-  until p = pts;
+  if (Abs(outsideCnt) < 2) then
+  begin
+    // if path1's location is still equivocal then check its midpoint
+    path := GetCleanPath(op1);
+    mp := Clipper.Core.GetBounds(path).MidPoint;
+    path := GetCleanPath(op2);
+    Result := PointInPolygon(mp, path) <> pipOutside;
+  end
+  else
+     Result := (outsideCnt < 0);
 end;
 //------------------------------------------------------------------------------
 
@@ -2314,21 +2342,9 @@ begin
   begin
     e2.outrec.pts := e1.outrec.pts;
     e1.outrec.pts := nil;
-  end else
-  begin
+  end
+  else
     SetOwner(e2.outrec, e1.outrec);
-
-//    if FUsingPolytree then
-//    begin
-//      e := GetPrevHotEdge(e1);
-//      if not Assigned(e) then
-//        outRec.owner := nil else
-//        SetOwner(outRec, e.outrec);
-//      // nb: outRec.owner here is likely NOT the real
-//      // owner but this will be checked in DeepCheckOwner()
-//    end;
-
-  end;
 
   // and e1 and e2 are maxima and are about to be dropped from the Actives list.
   e1.outrec := nil;
@@ -2996,11 +3012,22 @@ begin
 end;
 //------------------------------------------------------------------------------
 
+procedure MoveSplits(fromOr, toOr: POutRec);
+var
+  i: integer;
+begin
+  if not assigned(fromOr.splits) then Exit;
+  for i := 0 to High(fromOr.splits) do
+    AddSplit(toOr, fromOr.splits[i]);
+  fromOr.splits := nil;
+end;
+//------------------------------------------------------------------------------
+
 procedure TClipperBase.ProcessHorzJoins;
 var
   i: integer;
   or1, or2: POutRec;
-  op1b, op2b: POutPt;
+  op1b, op2b, tmp: POutPt;
 begin
   for i := 0 to FHorzJoinList.Count -1 do
     with PHorzJoin(FHorzJoinList[i])^ do
@@ -3023,32 +3050,45 @@ begin
       or2.pts := op1b;
       FixOutRecPts(or2);
 
+      //if or1->pts has moved to or2 then update or1->pts!!
       if or1.pts.outrec = or2 then
       begin
         or1.pts := op1;
         or1.pts.outrec := or1;
       end;
 
-      if FUsingPolytree then //#498, #520, #584, D#576
+      if FUsingPolytree then //#498, #520, #584, D#576, #618
       begin
         if Path1InsidePath2(or1.pts, or2.pts) then
         begin
-          or2.owner := or1.owner;
-          SetOwner(or1, or2);
-        end else
+          //swap or1's & or2's pts
+          tmp := or1.pts;
+          or1.pts := or2.pts;
+          or2.pts := tmp;
+          FixOutRecPts(or1);
+          FixOutRecPts(or2);
+          //or2 is now inside or1
+          or2.owner := or1;
+        end
+        else if Path1InsidePath2(or2.pts, or1.pts) then
         begin
-          SetOwner(or2, or1);
-          AddSplit(or1, or2);
-        end;
+          or2.owner := or1;
+        end 
+        else
+          or2.owner := or1.owner;
+
+        AddSplit(or1, or2);
       end
       else
         or2.owner := or1;
     end else
     begin
       or2.pts := nil;
-      if FUsingPolytree then
-        SetOwner(or2, or1)
-      else
+      if FUsingPolytree then   
+      begin
+        SetOwner(or2, or1);
+        MoveSplits(or2, or1); //#618
+      end else
         or2.owner := or1;
     end;
   end;
@@ -3379,7 +3419,6 @@ var
   e: PActive;
   pt: TPoint64;
   op: POutPt;
-  currOr: POutRec;
   isLeftToRight, horzIsOpen: Boolean;
 begin
 (*******************************************************************************
@@ -3421,7 +3460,6 @@ begin
   {$ENDIF}
     FHorzSegList.Add(op);
   end;
-  currOr := horzEdge.outrec;
 
   while true do // loop through consec. horizontal edges
   begin
@@ -3489,18 +3527,19 @@ begin
       begin
         IntersectEdges(horzEdge, e, pt);
         SwapPositionsInAEL(horzEdge, e);
+        CheckJoinLeft(e, pt);
         horzEdge.currX := e.currX;
         e := horzEdge.nextInAEL;
       end else
       begin
         IntersectEdges(e, horzEdge, pt);
         SwapPositionsInAEL(e, horzEdge);
+        CheckJoinRight(e, pt);
         horzEdge.currX := e.currX;
         e := horzEdge.prevInAEL;
       end;
-      if IsHotEdge(horzEdge) and (horzEdge.outrec <> currOr) then
+      if IsHotEdge(horzEdge) then
       begin
-        currOr := horzEdge.outrec;
         //nb: The outrec containining the op returned by IntersectEdges
         //above may no longer be associated with horzEdge.
         FHorzSegList.Add(GetLastOp(horzEdge));
@@ -3713,27 +3752,29 @@ var
   i     : integer;
   split : POutrec;
 begin
-  Result := false;
+  // returns true if a valid owner is found in splits
+  // (and also assigns it to outrec.owner)
+  Result := true;
   for i := 0 to High(splits) do
   begin
     split := GetRealOutRec(splits[i]);
-    if not assigned(split) or (split = outrec) or (split = outrec.owner) then
-        Continue
-    else if Assigned(split.splits) and
-      CheckSplitOwner(outrec, split.splits) then
-    begin
-      Result := True;
-      Exit;
-    end
-    else if CheckBounds(split) and
+    if (split = nil) or 
+       (split = outrec) or 
+       (split.recursiveCheck = outrec) then Continue;
+       
+    split.recursiveCheck := outrec; // prevent infinite loops
+    if Assigned(split.splits) and
+      CheckSplitOwner(outrec, split.splits) then Exit
+    else if IsValidOwner(outrec, split) and
+      CheckBounds(split) and
       (split.bounds.Contains(outrec.bounds) and
-        Path1InsidePath2(outrec.pts, split.pts)) then
+      Path1InsidePath2(outrec.pts, split.pts)) then
     begin
       outrec.owner := split;
-      Result := True;
       Exit;
     end;
   end;
+  Result := false;
 end;
 //------------------------------------------------------------------------------
 

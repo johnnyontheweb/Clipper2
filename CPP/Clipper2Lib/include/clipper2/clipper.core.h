@@ -1,6 +1,6 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  16 July 2023                                                    *
+* Date      :  4 October 2023                                                  *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  Core Clipper Library structures and functions                   *
@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <climits>
 #include <numeric>
+
+#include "clipper2/clipper.version.h"
 
 namespace Clipper2Lib
 {
@@ -257,8 +259,8 @@ namespace Clipper2Lib
       }
       else
       {
-        left = top = std::numeric_limits<T>::max();
-        right = bottom = -std::numeric_limits<int64_t>::max();
+        left = top = (std::numeric_limits<T>::max)();
+        right = bottom = -(std::numeric_limits<int64_t>::max)();
       }
     }
 
@@ -309,6 +311,11 @@ namespace Clipper2Lib
         ((std::max)(top, rec.top) <= (std::min)(bottom, rec.bottom));
     };
 
+    bool operator==(const Rect<T>& other) const {
+      return left == other.left && right == other.right && 
+        top == other.top && bottom == other.bottom;
+    }
+
     friend std::ostream& operator<<(std::ostream& os, const Rect<T>& rect) {
       os << "("
         << rect.left << "," << rect.top << "," << rect.right << "," << rect.bottom
@@ -348,8 +355,8 @@ namespace Clipper2Lib
   template <typename T>
   Rect<T> GetBounds(const Path<T>& path)
   {
-    auto xmin = std::numeric_limits<T>::max();
-    auto ymin = std::numeric_limits<T>::max();
+    auto xmin = (std::numeric_limits<T>::max)();
+    auto ymin = (std::numeric_limits<T>::max)();
     auto xmax = std::numeric_limits<T>::lowest();
     auto ymax = std::numeric_limits<T>::lowest();
     for (const auto& p : path)
@@ -365,8 +372,8 @@ namespace Clipper2Lib
   template <typename T>
   Rect<T> GetBounds(const Paths<T>& paths)
   {
-    auto xmin = std::numeric_limits<T>::max();
-    auto ymin = std::numeric_limits<T>::max();
+    auto xmin = (std::numeric_limits<T>::max)();
+    auto ymin = (std::numeric_limits<T>::max)();
     auto xmax = std::numeric_limits<T>::lowest();
     auto ymax = std::numeric_limits<T>::lowest();
     for (const Path<T>& path : paths)

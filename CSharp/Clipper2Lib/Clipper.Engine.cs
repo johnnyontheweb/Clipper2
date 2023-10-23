@@ -1,6 +1,6 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  19 July 2023                                                    *
+* Date      :  19 October 2023                                                 *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  This is the main polygon clipping module                        *
@@ -13,6 +13,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 
 namespace Clipper2Lib
@@ -108,7 +109,7 @@ namespace Clipper2Lib
 
   internal struct LocMinSorter : IComparer<LocalMinima>
   {
-    public int Compare(LocalMinima locMin1, LocalMinima locMin2)
+    public readonly int Compare(LocalMinima locMin1, LocalMinima locMin2)
     {
       return locMin2.vertex.pt.Y.CompareTo(locMin1.vertex.pt.Y);
     }
@@ -150,11 +151,12 @@ namespace Clipper2Lib
     public Path64 path = new Path64();
     public bool isOpen;
     public List<int>? splits = null;
+    public OutRec? recursiveSplit;
   };
 
   internal struct HorzSegSorter : IComparer<HorzSegment>
   {
-    public int Compare(HorzSegment? hs1, HorzSegment? hs2)
+    public readonly int Compare(HorzSegment? hs1, HorzSegment? hs2)
     {
       if (hs1 == null || hs2 == null) return 0;
       if (hs1.rightOp == null)
@@ -506,7 +508,9 @@ namespace Clipper2Lib
     {
       if ((currentY == ae.top.Y) || (ae.top.X == ae.bot.X)) return ae.top.X;
       if (currentY == ae.bot.Y) return ae.bot.X;
-      return ae.bot.X + (long) Math.Round(ae.dx * (currentY - ae.bot.Y));
+
+      // use MidpointRounding.ToEven in order to explicitly match the nearbyint behaviour on the C++ side
+      return ae.bot.X + (long) Math.Round(ae.dx * (currentY - ae.bot.Y), MidpointRounding.ToEven);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -625,7 +629,7 @@ namespace Clipper2Lib
 
     private struct IntersectListSort : IComparer<IntersectNode>
     {
-      public int Compare(IntersectNode a, IntersectNode b)
+      public readonly int Compare(IntersectNode a, IntersectNode b)
       {
         if (a.pt.Y == b.pt.Y)
         {
@@ -721,6 +725,14 @@ namespace Clipper2Lib
       while ((outRec != null) && (outRec.pts == null))
         outRec = outRec.owner;
       return outRec;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsValidOwner(OutRec? outRec, OutRec? testOwner)
+    {
+      while ((testOwner != null) && (testOwner != outRec))
+        testOwner = testOwner.owner;
+      return testOwner == null;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -835,17 +847,6 @@ namespace Clipper2Lib
     private LocalMinima PopLocalMinima()
     {
       return _minimaList[_currentLocMin++];
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AddLocMin(Vertex vert, PathType polytype, bool isOpen)
-    {
-      // make sure the vertex is added only once ...
-      if ((vert.flags & VertexFlags.LocalMin) != VertexFlags.None) return;
-      vert.flags |= VertexFlags.LocalMin;
-
-      LocalMinima lm = new LocalMinima(vert, polytype, isOpen);
-      _minimaList.Add(lm);
     }
    
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1889,9 +1890,9 @@ namespace Clipper2Lib
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AddNewIntersectNode(Active ae1, Active ae2, long topY)
     {
-      if (!InternalClipper.GetIntersectPt(
+      if (!InternalClipper.GetIntersectPoint(
         ae1.bot, ae1.top, ae2.bot, ae2.top, out Point64 ip))
-        ip = new Point64(ae1.curX, topY);
+          ip = new Point64(ae1.curX, topY);
 
       if (ip.Y > _currentBotY || ip.Y < topY)
       {
@@ -2164,7 +2165,6 @@ private void DoHorizontal(Active horz)
 #endif
         AddToHorzSegList(op);
       }
-      OutRec? currOutrec = horz.outrec!;
 
       for (; ; )
       {
@@ -2228,6 +2228,7 @@ private void DoHorizontal(Active horz)
           {
             IntersectEdges(horz, ae, pt);
             SwapPositionsInAEL(horz, ae);
+            CheckJoinLeft(ae, pt);
             horz.curX = ae.curX;
             ae = horz.nextInAEL;
           }
@@ -2235,15 +2236,13 @@ private void DoHorizontal(Active horz)
           {
             IntersectEdges(ae, horz, pt);
             SwapPositionsInAEL(ae, horz);
+            CheckJoinRight(ae, pt);
             horz.curX = ae.curX;
             ae = horz.prevInAEL;
           }
 
-          if (IsHotEdge(horz) && (horz.outrec != currOutrec))
-          {
-            currOutrec = horz.outrec;
+          if (IsHotEdge(horz))
             AddToHorzSegList(GetLastOp(horz));
-          }
 
         } // we've reached the end of this horizontal
 
@@ -2590,21 +2589,31 @@ private void DoHorizontal(Active horz)
       } 
     }
 
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Rect64 GetBounds(OutPt op)
+    private static Path64 GetCleanPath(OutPt op)
     {
-      Rect64 result = new Rect64(op.pt.X, op.pt.Y, op.pt.X, op.pt.Y);
-      OutPt op2 = op.next!;
+      Path64 result = new Path64();
+      OutPt op2 = op;
+      while (op2.next != op &&
+        ((op2.pt.X == op2.next!.pt.X && op2.pt.X == op2.prev.pt.X) ||
+          (op2.pt.Y == op2.next.pt.Y && op2.pt.Y == op2.prev.pt.Y))) op2 = op2.next;
+      result.Add(op2.pt);
+      OutPt prevOp = op2;
+      op2 = op2.next;
       while (op2 != op)
       {
-        if (op2.pt.X < result.left) result.left = op2.pt.X;
-        else if (op2.pt.X > result.right) result.right = op2.pt.X;
-        if (op2.pt.Y < result.top) result.top = op2.pt.Y;
-        else if (op2.pt.Y > result.bottom) result.bottom = op2.pt.Y;
-        op2 = op2.next!;
+        if ((op2.pt.X != op2.next!.pt.X || op2.pt.X != prevOp.pt.X) &&
+          (op2.pt.Y != op2.next.pt.Y || op2.pt.Y != prevOp.pt.Y))
+        {
+          result.Add(op2.pt);
+          prevOp = op2;
+        }
+        op2 = op2.next;
       }
       return result;
     }
+
 
     private static PointInPolygonResult PointInOpPolygon(Point64 pt, OutPt op)
     {
@@ -2676,19 +2685,30 @@ private void DoHorizontal(Active horz)
     {
       // we need to make some accommodation for rounding errors
       // so we won't jump if the first vertex is found outside
+      PointInPolygonResult result;
       int outside_cnt = 0;
       OutPt op = op1;
       do
       {
-        PointInPolygonResult result = PointInOpPolygon(op.pt, op2);
+        result = PointInOpPolygon(op.pt, op2);
         if (result == PointInPolygonResult.IsOutside) ++outside_cnt;
         else if (result == PointInPolygonResult.IsInside) --outside_cnt;
         op = op.next!;
       } while (op != op1 && Math.Abs(outside_cnt) < 2);
       if (Math.Abs(outside_cnt) > 1) return (outside_cnt < 0);
       // since path1's location is still equivocal, check its midpoint
-      Point64 mp = GetBounds(op).MidPoint();
-      return PointInOpPolygon(mp, op2) == PointInPolygonResult.IsInside;
+      Point64 mp = GetBounds(GetCleanPath(op1)).MidPoint();
+      Path64 path2 = GetCleanPath(op2);
+      return InternalClipper.PointInPolygon(mp, path2) != PointInPolygonResult.IsOutside;
+    }
+
+    private void MoveSplits(OutRec fromOr, OutRec toOr)
+    {
+      if (fromOr.splits == null) return;
+      toOr.splits ??= new List<int>();
+      foreach (int i in fromOr.splits)
+        toOr.splits.Add(i);
+      fromOr.splits = null;
     }
 
     private void ProcessHorzJoins()
@@ -2709,27 +2729,33 @@ private void DoHorizontal(Active horz)
         {
           or2 = NewOutRec();
           or2.pts = op1b;
-
           FixOutRecPts(or2);
+
+          //if or1->pts has moved to or2 then update or1->pts!!
           if (or1.pts!.outrec == or2)
           {
             or1.pts = j.op1;
             or1.pts.outrec = or1;
           }
 
-          if (_using_polytree)  //#498, #520, #584, D#576
+          if (_using_polytree)  //#498, #520, #584, D#576, #618
           {
             if (Path1InsidePath2(or1.pts, or2.pts))
             {
-              or2.owner = or1.owner;
-              SetOwner(or1, or2);
+              //swap or1's & or2's pts
+              (or2.pts, or1.pts) = (or1.pts, or2.pts);
+              FixOutRecPts(or1);
+              FixOutRecPts(or2);
+              //or2 is now inside or1
+              or2.owner = or1;
             }
+            else if (Path1InsidePath2(or2.pts, or1.pts))
+              or2.owner = or1;
             else
-            {
-              SetOwner(or2, or1);
-              or1.splits ??= new List<int>();
-              or1.splits.Add(or2.idx); 
-            }
+              or2.owner = or1.owner;
+
+            or1.splits ??= new List<int>();
+            or1.splits.Add(or2.idx);
           }
           else
             or2.owner = or1;
@@ -2738,7 +2764,10 @@ private void DoHorizontal(Active horz)
         {
           or2.pts = null;
           if (_using_polytree)
+          {
             SetOwner(or2, or1);
+            MoveSplits(or2, or1); //#618
+          }
           else
             or2.owner = or1;
         }
@@ -3023,10 +3052,13 @@ private void DoHorizontal(Active horz)
       foreach (int i in splits!)
       {
         OutRec? split = GetRealOutRec(_outrecList[i]);
-        if (split == null || split == outrec || split == outrec.owner) continue;
+        if (split == null || split == outrec || split.recursiveSplit == outrec) continue;
+        split.recursiveSplit = outrec; //#599
         if (split!.splits != null && CheckSplitOwner(outrec, split.splits)) return true;
-        if (CheckBounds(split) && split.bounds.Contains(outrec.bounds) &&
-            Path1InsidePath2(outrec.pts!, split.pts!))
+        if (IsValidOwner(outrec, split) && 
+          CheckBounds(split) && 
+          split.bounds.Contains(outrec.bounds) &&
+          Path1InsidePath2(outrec.pts!, split.pts!))
         {
           outrec.owner = split; //found in split
           return true;
@@ -3460,9 +3492,38 @@ private void DoHorizontal(Active horz)
     {
       _childs.Clear();
     }
-  } // PolyPathBase class
 
-  public class PolyPath64 : PolyPathBase
+    internal string ToStringInternal(int idx, int level)
+    {
+      string result = "", padding = "", plural = "s";
+      if (_childs.Count == 1) plural = "";
+      padding = padding.PadLeft(level * 2);
+      if ((level & 1) == 0)
+        result += string.Format("{0}+- hole ({1}) contains {2} nested polygon{3}.\n", padding, idx, _childs.Count, plural);
+      else
+        result += string.Format("{0}+- polygon ({1}) contains {2} hole{3}.\n", padding, idx, _childs.Count, plural);
+
+      for (int i = 0; i < Count; i++)
+        if (_childs[i].Count > 0)
+          result += _childs[i].ToStringInternal(i, level +1);
+      return result;
+    }
+
+    public override string ToString()
+    {
+      if (Level > 0) return ""; //only accept tree root 
+      string plural = "s";
+      if (_childs.Count == 1) plural = "";
+      string result = string.Format("Polytree with {0} polygon{1}.\n", _childs.Count, plural);
+      for (int i = 0; i < Count; i++)
+        if (_childs[i].Count > 0)
+          result += _childs[i].ToStringInternal(i, 1);
+      return result + '\n';
+    }
+
+} // PolyPathBase class
+
+public class PolyPath64 : PolyPathBase
   {
     public Path64? Polygon { get; private set; } // polytree root's polygon == null
 
@@ -3507,7 +3568,6 @@ private void DoHorizontal(Active horz)
       return result;
     }
   }
-
   public class PolyPathD : PolyPathBase
   {
     internal double Scale { get; set; }

@@ -1,6 +1,6 @@
 /*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  16 July 2023                                                    *
+* Date      :  24 September 2023                                               *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  Path Offset (Inflate/Shrink)                                    *
@@ -200,6 +200,24 @@ PointD IntersectPoint(const PointD& pt1a, const PointD& pt1b,
 	}
 }
 
+void ClipperOffset::DoBevel(Group& group, const Path64& path, size_t j, size_t k)
+{
+	PointD pt1, pt2;
+	if (j == k)
+	{
+		double abs_delta = std::abs(group_delta_);
+		pt1 = PointD(path[j].x - abs_delta * norms[j].x, path[j].y - abs_delta * norms[j].y);
+		pt2 = PointD(path[j].x + abs_delta * norms[j].x, path[j].y + abs_delta * norms[j].y);
+	} 
+	else
+	{
+		pt1 = PointD(path[j].x + group_delta_ * norms[k].x, path[j].y + group_delta_ * norms[k].y);
+		pt2 = PointD(path[j].x + group_delta_ * norms[j].x, path[j].y + group_delta_ * norms[j].y);
+	}
+	group.path.push_back(Point64(pt1));
+	group.path.push_back(Point64(pt2));
+}
+
 void ClipperOffset::DoSquare(Group& group, const Path64& path, size_t j, size_t k)
 {
 	PointD vec;
@@ -284,20 +302,16 @@ void ClipperOffset::DoRound(Group& group, const Path64& path, size_t j, size_t k
 #else
 	group.path.push_back(Point64(pt.x + offsetVec.x, pt.y + offsetVec.y));
 #endif
-	if (angle > -PI + 0.01)	// avoid 180deg concave
+	int steps = static_cast<int>(std::ceil(steps_per_rad_ * std::abs(angle))); // #448, #456
+	for (int i = 1; i < steps; ++i) // ie 1 less than steps
 	{
-		int steps = static_cast<int>(std::ceil(steps_per_rad_ * std::abs(angle))); // #448, #456
-		for (int i = 1; i < steps; ++i) // ie 1 less than steps
-		{
-			offsetVec = PointD(offsetVec.x * step_cos_ - step_sin_ * offsetVec.y,
-				offsetVec.x * step_sin_ + offsetVec.y * step_cos_);
+		offsetVec = PointD(offsetVec.x * step_cos_ - step_sin_ * offsetVec.y,
+			offsetVec.x * step_sin_ + offsetVec.y * step_cos_);
 #ifdef USINGZ
-			group.path.push_back(Point64(pt.x + offsetVec.x, pt.y + offsetVec.y, pt.z));
+		group.path.push_back(Point64(pt.x + offsetVec.x, pt.y + offsetVec.y, pt.z));
 #else
-			group.path.push_back(Point64(pt.x + offsetVec.x, pt.y + offsetVec.y));
+		group.path.push_back(Point64(pt.x + offsetVec.x, pt.y + offsetVec.y));
 #endif
-
-		}
 	}
 	group.path.push_back(GetPerpendic(path[j], norms[j], group_delta_));
 }
@@ -327,11 +341,7 @@ void ClipperOffset::OffsetPoint(Group& group, Path64& path, size_t j, size_t k)
 		return;
 	}
 
-	if (cos_a > 0.999) // almost straight - less than 2.5 degree (#424, #526) 
-	{
-		DoMiter(group, path, j, k, cos_a);
-	}
-	else if (cos_a > -0.99 && (sin_a * group_delta_ < 0))
+	if (cos_a > -0.99 && (sin_a * group_delta_ < 0)) // test for concavity first (#593)
 	{
 		// is concave
 		group.path.push_back(GetPerpendic(path[j], norms[k], group_delta_));
@@ -340,20 +350,39 @@ void ClipperOffset::OffsetPoint(Group& group, Path64& path, size_t j, size_t k)
 		group.path.push_back(path[j]); // (#405)
 		group.path.push_back(GetPerpendic(path[j], norms[j], group_delta_));
 	}
+	else if (cos_a > 0.999) // almost straight - less than 2.5 degree (#424, #526) 
+	{
+		DoMiter(group, path, j, k, cos_a);
+	}
 	else if (join_type_ == JoinType::Miter)
 	{
 		// miter unless the angle is so acute the miter would exceeds ML
 		if (cos_a > temp_lim_ - 1) DoMiter(group, path, j, k, cos_a);
 		else DoSquare(group, path, j, k);
 	}
-	else if (cos_a > 0.99 || join_type_ == JoinType::Square) // 0.99 ~= 8.1 deg.
-		DoSquare(group, path, j, k);
-	else
+	else if (cos_a > 0.99 || join_type_ == JoinType::Bevel) 
+		// ie > 2.5 deg (see above) but less than ~8 deg ( acos(0.99) )
+		DoBevel(group, path, j, k);
+	else if (join_type_ == JoinType::Round)
 		DoRound(group, path, j, k, std::atan2(sin_a, cos_a));
+	else
+		DoSquare(group, path, j, k);
 }
 
 void ClipperOffset::OffsetPolygon(Group& group, Path64& path)
 {
+	// when the path is contracting, make sure 
+	// there is sufficient space to do so.                //#593
+	// nb: this will have a small impact on performance
+	double a = Area(path);
+	// contracting when orientation is opposite offset direction
+	if ((a < 0) != (group_delta_ < 0)) 
+	{
+		Rect64 rec = GetBounds(path);
+		double offsetMinDim = std::fabs(group_delta_) * 2;
+		if (offsetMinDim > rec.Width() || offsetMinDim > rec.Height()) return;
+	}
+
 	for (Path64::size_type j = 0, k = path.size() -1; j < path.size(); k = j, ++j)
 		OffsetPoint(group, path, j, k);
 	group.paths_out.push_back(group.path);
@@ -386,17 +415,7 @@ void ClipperOffset::OffsetOpenPath(Group& group, Path64& path)
 		switch (end_type_)
 		{
 		case EndType::Butt:
-#ifdef USINGZ
-			group.path.push_back(Point64(
-				path[0].x - norms[0].x * group_delta_,
-				path[0].y - norms[0].y * group_delta_,
-				path[0].z));
-#else
-			group.path.push_back(Point64(
-				path[0].x - norms[0].x * group_delta_,
-				path[0].y - norms[0].y * group_delta_));
-#endif
-			group.path.push_back(GetPerpendic(path[0], norms[0], group_delta_));
+			DoBevel(group, path, 0, 0);
 			break;
 		case EndType::Round:
 			DoRound(group, path, 0, 0, PI);
@@ -428,17 +447,7 @@ void ClipperOffset::OffsetOpenPath(Group& group, Path64& path)
 		switch (end_type_)
 		{
 		case EndType::Butt:
-#ifdef USINGZ
-			group.path.push_back(Point64(
-				path[highI].x - norms[highI].x * group_delta_,
-				path[highI].y - norms[highI].y * group_delta_,
-				path[highI].z));
-#else
-			group.path.push_back(Point64(
-				path[highI].x - norms[highI].x * group_delta_,
-				path[highI].y - norms[highI].y * group_delta_));
-#endif
-			group.path.push_back(GetPerpendic(path[highI], norms[highI], group_delta_));
+			DoBevel(group, path, highI, highI);
 			break;
 		case EndType::Round:
 			DoRound(group, path, highI, highI, PI);
@@ -528,7 +537,8 @@ void ClipperOffset::DoGroupOffset(Group& group)
 			if (group.join_type == JoinType::Round)
 			{
 				double radius = abs_delta;
-				group.path = Ellipse(path[0], radius, radius);
+				int steps = static_cast<int>(std::ceil(steps_per_rad_ * 2 * PI)); //#617
+				group.path = Ellipse(path[0], radius, radius, steps);
 #ifdef USINGZ
 				for (auto& p : group.path) p.z = path[0].z;
 #endif

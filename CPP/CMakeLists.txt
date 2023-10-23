@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(Clipper2 VERSION 1.2.2 LANGUAGES C CXX)
+project(Clipper2 VERSION 1.2.3 LANGUAGES C CXX)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(NOT DEFINED CMAKE_CXX_STANDARD OR CMAKE_CXX_STANDARD LESS 17)
@@ -17,16 +17,24 @@ option(USE_EXTERNAL_GBENCHMARK "Use the googlebenchmark" OFF)
 option(BUILD_SHARED_LIBS "Build shared libs" OFF)
 set(CLIPPER2_USINGZ "ON" CACHE STRING "Build Clipper2Z, either \"ON\" or \"OFF\" or \"ONLY\"")
 
+if (APPLE)
+    set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")
+endif ()
+
 include(GNUInstallDirs)
 
+set(CLIPPER2_INC_FOLDER ${PROJECT_SOURCE_DIR}/Clipper2Lib/include/clipper2)
+configure_file(clipper.version.in ${CLIPPER2_INC_FOLDER}/clipper.version.h)
+
 set(CLIPPER2_INC
-  Clipper2Lib/include/clipper2/clipper.h
-  Clipper2Lib/include/clipper2/clipper.core.h
-  Clipper2Lib/include/clipper2/clipper.engine.h
-  Clipper2Lib/include/clipper2/clipper.export.h
-  Clipper2Lib/include/clipper2/clipper.minkowski.h
-  Clipper2Lib/include/clipper2/clipper.offset.h
-  Clipper2Lib/include/clipper2/clipper.rectclip.h
+  ${CLIPPER2_INC_FOLDER}/clipper.h
+  ${CLIPPER2_INC_FOLDER}/clipper.version.h
+  ${CLIPPER2_INC_FOLDER}/clipper.core.h
+  ${CLIPPER2_INC_FOLDER}/clipper.engine.h
+  ${CLIPPER2_INC_FOLDER}/clipper.export.h
+  ${CLIPPER2_INC_FOLDER}/clipper.minkowski.h
+  ${CLIPPER2_INC_FOLDER}/clipper.offset.h
+  ${CLIPPER2_INC_FOLDER}/clipper.rectclip.h
 )
 
 set(CLIPPER2_SRC
@@ -190,15 +198,13 @@ endif()
     Tests/TestOffsetOrientation.cpp
     Tests/TestOrientation.cpp
     Tests/TestPolygons.cpp
-    Tests/TestPolytreeHoles1.cpp
-    Tests/TestPolytreeHoles2.cpp
-    Tests/TestPolytreeHoles3.cpp
-    Tests/TestPolytreeHoles4.cpp
+    Tests/TestPolytreeHoles.cpp
     Tests/TestPolytreeIntersection.cpp
     Tests/TestPolytreeUnion.cpp
     Tests/TestRandomPaths.cpp
     Tests/TestRectClip.cpp
     Tests/TestTrimCollinear.cpp
+    Tests/TestWindows.cpp
   )
 
   set(CLIPPER2_TESTS "") # one or both of ClipperTests/ClipperTestsZ

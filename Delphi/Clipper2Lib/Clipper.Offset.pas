@@ -2,7 +2,7 @@ unit Clipper.Offset;
 
 (*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  16 July 2023                                                    *
+* Date      :  24 September 2023                                               *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  Path Offset (Inflate/Shrink)                                    *
@@ -18,7 +18,10 @@ uses
 
 type
 
-  TJoinType = (jtSquare, jtRound, jtMiter);
+  TJoinType = (jtMiter, jtSquare, jtBevel, jtRound);
+  //jtSquare: Joins are 'squared' at exactly the offset distance (complex code)
+  //jtBevel : offset distances vary depending on the angle (simple code, faster)
+
   TEndType = (etPolygon, etJoined, etButt, etSquare, etRound);
   // etButt   : offsets both sides of a path, with square blunt ends
   // etSquare : offsets both sides of a path, with square extended ends
@@ -70,6 +73,7 @@ type
     procedure AddPoint(const pt: TPoint64); overload;
       {$IFDEF INLINING} inline; {$ENDIF}
     procedure DoSquare(j, k: Integer);
+    procedure DoBevel(j, k: Integer);
     procedure DoMiter(j, k: Integer; cosA: Double);
     procedure DoRound(j, k: integer; angle: double);
     procedure OffsetPoint(j: Integer; var k: integer);
@@ -298,7 +302,7 @@ end;
 
 procedure TClipperOffset.DoGroupOffset(group: TGroup);
 var
-  i,j, len, lowestIdx: Integer;
+  i,j, len, lowestIdx, steps: Integer;
   r, stepsPer360, arcTol, area: Double;
   absDelta: double;
   rec: TRect64;
@@ -369,7 +373,8 @@ begin
         r := absDelta;
         with fInPath[0] do
         begin
-          fOutPath := Path64(Ellipse(RectD(X-r, Y-r, X+r, Y+r)));
+          steps := Ceil(fStepsPerRad * TwoPi); //#617
+          fOutPath := Path64(Ellipse(RectD(X-r, Y-r, X+r, Y+r), steps));
 {$IFDEF USINGZ}
           for j := 0 to high(fOutPath) do
             fOutPath[j].Z := Z;
@@ -429,7 +434,20 @@ end;
 procedure TClipperOffset.OffsetPolygon;
 var
   i,j: integer;
+  a, offsetMinDim: double;
+  rec: TRect64;
 begin
+  //when the path is contracting, make sure
+  //there is sufficient space to do so.                //#593
+  //nb: this will have a small impact on performance
+  a := Area(fInPath);
+  if (a < 0) <> (fGroupDelta < 0) then
+  begin
+    rec := GetBounds(fInPath);
+    offsetMinDim := Abs(fGroupDelta) * 2;
+    if (offsetMinDim >= rec.Width) or (offsetMinDim >= rec.Height) then Exit;
+  end;
+
   j := high(fInPath);
   for i := 0 to high(fInPath) do
     OffsetPoint(i, j);
@@ -469,20 +487,7 @@ begin
     AddPoint(fInPath[0]);
   end else
   case fEndType of
-    etButt:
-      begin
-{$IFDEF USINGZ}
-        with fInPath[0] do AddPoint(Point64(
-          X - fNorms[0].X * fGroupDelta,
-          Y - fNorms[0].Y * fGroupDelta,
-          Z));
-{$ELSE}
-        with fInPath[0] do AddPoint(Point64(
-          X - fNorms[0].X * fGroupDelta,
-          Y - fNorms[0].Y * fGroupDelta));
-{$ENDIF}
-        AddPoint(GetPerpendic(fInPath[0], fNorms[0], fGroupDelta));
-      end;
+    etButt: DoBevel(0, 0);
     etRound: DoRound(0,0, PI);
     else DoSquare(0, 0);
   end;
@@ -509,20 +514,7 @@ begin
     AddPoint(fInPath[highI]);
   end else
   case fEndType of
-    etButt:
-      begin
-{$IFDEF USINGZ}
-        with fInPath[highI] do AddPoint(Point64(
-          X - fNorms[highI].X *fGroupDelta,
-          Y - fNorms[highI].Y *fGroupDelta,
-          Z));
-{$ELSE}
-        with fInPath[highI] do AddPoint(Point64(
-          X - fNorms[highI].X *fGroupDelta,
-          Y - fNorms[highI].Y *fGroupDelta));
-{$ENDIF}
-        AddPoint(GetPerpendic(fInPath[highI], fNorms[highI], fGroupDelta));
-      end;
+    etButt: DoBevel(highI, highI);
     etRound: DoRound(highI,highI, PI);
     else DoSquare(highI, highI);
   end;
@@ -719,6 +711,31 @@ begin
 end;
 //------------------------------------------------------------------------------
 
+procedure TClipperOffset.DoBevel(j, k: Integer);
+var
+  absDelta: double;
+begin
+  if k = j then
+  begin
+		absDelta :=  abs(fGroupDelta);
+		AddPoint(
+      fInPath[j].x - absDelta * fNorms[j].x,
+      fInPath[j].y - absDelta * fNorms[j].y);
+		AddPoint(
+      fInPath[j].x + absDelta * fNorms[j].x,
+      fInPath[j].y + absDelta * fNorms[j].y);
+  end else
+  begin
+		AddPoint(
+      fInPath[j].x + fGroupDelta * fNorms[k].x,
+      fInPath[j].y + fGroupDelta * fNorms[k].y);
+		AddPoint(
+      fInPath[j].x + fGroupDelta * fNorms[j].x,
+      fInPath[j].y + fGroupDelta * fNorms[j].y);
+  end;
+end;
+//------------------------------------------------------------------------------
+
 procedure TClipperOffset.DoSquare(j, k: Integer);
 var
   vec, pt1,pt2,pt3,pt4, pt,ptQ : TPointD;
@@ -879,9 +896,8 @@ begin
     Exit;
   end;
 
-  if (cosA > 0.999) then // almost straight - less than 2.5 degree (#424, #526)
-    DoMiter(j, k, cosA)
-  else if (cosA > -0.99) and (sinA * fGroupDelta < 0) then
+  //test for concavity first (#593)
+  if (cosA > -0.99) and (sinA * fGroupDelta < 0) then
   begin
     // is concave
     AddPoint(GetPerpendic(fInPath[j], fNorms[k], fGroupDelta));
@@ -890,17 +906,22 @@ begin
     AddPoint(fInPath[j]); // (#405)
     AddPoint(GetPerpendic(fInPath[j], fNorms[j], fGroupDelta));
   end
+  else if (cosA > 0.999) then
+    // almost straight - less than 2.5 degree (#424, #526)
+    DoMiter(j, k, cosA)
   else if (fJoinType = jtMiter) then
   begin
     // miter unless the angle is so acute the miter would exceeds ML
     if (cosA > fTmpLimit -1) then DoMiter(j, k, cosA)
     else DoSquare(j, k);
   end
-  else if (cosA > 0.99) or (fJoinType = jtSquare) then
-		//angle less than 8 degrees or squared joins
-    DoSquare(j, k)
+  else if (cosA > 0.99) or (fJoinType = jtBevel) then
+		// ie > 2.5 deg (see above) but less than ~8 deg ( acos(0.99) )
+    DoBevel(j, k)
+  else if (fJoinType = jtRound) then
+    DoRound(j, k, ArcTan2(sinA, cosA))
   else
-    DoRound(j, k, ArcTan2(sinA, cosA));
+    DoSquare(j, k);
 
   k := j;
 end;
