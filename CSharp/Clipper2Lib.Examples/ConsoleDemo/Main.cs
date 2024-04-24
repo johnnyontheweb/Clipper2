@@ -17,7 +17,7 @@ namespace ClipperDemo1
   {
     public static void Main()
     {
-      //ClipTestPolys();
+      ClipTestPolys();
 
       //LoopThruTestPolygons();             // summary test all
       //LoopThruTestPolygons(110, 113);     // display test range
