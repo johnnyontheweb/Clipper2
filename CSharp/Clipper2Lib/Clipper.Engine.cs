@@ -1,8 +1,8 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  24 October 2023                                                 *
+* Date      :  17 April 2024                                                   *
 * Website   :  http://www.angusj.com                                           *
-* Copyright :  Angus Johnson 2010-2023                                         *
+* Copyright :  Angus Johnson 2010-2024                                         *
 * Purpose   :  This is the main polygon clipping module                        *
 * Thanks    :  Special thanks to Thong Nguyen, Guus Kuiper, Phil Stopford,     *
 *           :  and Daniel Gosnell for their invaluable assistance with C#.     *
@@ -13,7 +13,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 
 namespace Clipper2Lib
@@ -147,28 +146,12 @@ namespace Clipper2Lib
     public Active? backEdge;
     public OutPt? pts;
     public PolyPathBase? polypath;
-    public Rect64 bounds = new Rect64();
+    public Rect64 bounds;
     public Path64 path = new Path64();
     public bool isOpen;
-    public List<int>? splits = null;
+    public List<int>? splits;
     public OutRec? recursiveSplit;
   };
-
-  internal struct HorzSegSorter : IComparer<HorzSegment>
-  {
-    public readonly int Compare(HorzSegment? hs1, HorzSegment? hs2)
-    {
-      if (hs1 == null || hs2 == null) return 0;
-      if (hs1.rightOp == null)
-      {
-        return hs2.rightOp == null ? 0 : 1;
-      }
-      else if (hs2.rightOp == null)
-        return -1;
-      else
-        return hs1.leftOp!.pt.X.CompareTo(hs2.leftOp!.pt.X);
-    }
-  }
 
   internal class HorzSegment
   {
@@ -242,12 +225,19 @@ namespace Clipper2Lib
       minimaList.Add(lm);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void EnsureCapacity<T>(this List<T> list, int minCapacity)
+    {
+      if(list.Capacity < minCapacity)
+        list.Capacity = minCapacity;
+    }
+
     internal static void AddPathsToVertexList(Paths64 paths, PathType polytype, bool isOpen,
       List<LocalMinima> minimaList, List<Vertex> vertexList)
     {
       int totalVertCnt = 0;
       foreach (Path64 path in paths) totalVertCnt += path.Count;
-      vertexList.Capacity = vertexList.Count + totalVertCnt;
+      vertexList.EnsureCapacity(vertexList.Count + totalVertCnt);
 
       foreach (Path64 path in paths)
       {
@@ -800,7 +790,7 @@ namespace Clipper2Lib
         _isSortedMinimaList = true;
       }
 
-      _scanlineList.Capacity = _minimaList.Count;
+      _scanlineList.EnsureCapacity(_minimaList.Count);
       for (int i = _minimaList.Count - 1; i >= 0; i--)
         _scanlineList.Add(_minimaList[i].vertex.pt.Y);
 
@@ -1527,7 +1517,11 @@ namespace Clipper2Lib
 
       if (IsJoined(ae)) Split(ae, ae.bot);
 
-      if (IsHorizontal(ae)) return;
+      if (IsHorizontal(ae)) 
+      {
+        if (!IsOpen(ae)) TrimHorz(ae, PreserveCollinear);
+        return; 
+      }
       InsertScanline(ae.top.Y);
 
       CheckJoinLeft(ae, ae.bot);
@@ -1554,33 +1548,34 @@ namespace Clipper2Lib
       return result;
     }
 
-    private OutPt? IntersectEdges(Active ae1, Active ae2, Point64 pt)
+    private void IntersectEdges(Active ae1, Active ae2, Point64 pt)
     {
       OutPt? resultOp = null;
-
       // MANAGE OPEN PATH INTERSECTIONS SEPARATELY ...
       if (_hasOpenPaths && (IsOpen(ae1) || IsOpen(ae2)))
       {
-        if (IsOpen(ae1) && IsOpen(ae2)) return null;
+        if (IsOpen(ae1) && IsOpen(ae2)) return;
         // the following line avoids duplicating quite a bit of code
         if (IsOpen(ae2)) SwapActives(ref ae1, ref ae2);
         if (IsJoined(ae2)) Split(ae2, pt); // needed for safety
 
         if (_cliptype == ClipType.Union)
         {
-          if (!IsHotEdge(ae2)) return null;
+          if (!IsHotEdge(ae2)) return;
         }
-        else if (ae2.localMin.polytype == PathType.Subject)
-          return null;
+        else if (ae2.localMin.polytype == PathType.Subject) return;
 
         switch (_fillrule)
         {
           case FillRule.Positive:
-            if (ae2.windCount != 1) return null; break;
+            if (ae2.windCount != 1) return; 
+            break;
           case FillRule.Negative:
-            if (ae2.windCount != -1) return null; break;
+            if (ae2.windCount != -1) return; 
+            break;
           default:
-            if (Math.Abs(ae2.windCount) != 1) return null; break;
+            if (Math.Abs(ae2.windCount) != 1) return; 
+            break;
         }
 
         // toggle contribution ...
@@ -1611,7 +1606,7 @@ namespace Clipper2Lib
               SetSides(ae3.outrec!, ae1, ae3);
             else
               SetSides(ae3.outrec!, ae3, ae1);
-            return ae3.outrec!.pts;
+            return;
           }
 
           resultOp = StartOpenPath(ae1, pt);
@@ -1622,7 +1617,7 @@ namespace Clipper2Lib
 #if USINGZ
         SetZ(ae1, ae2, ref resultOp.pt);
 #endif
-        return resultOp;
+        return;
       }
 
       // MANAGING CLOSED PATHS FROM HERE ON
@@ -1683,7 +1678,8 @@ namespace Clipper2Lib
       bool e1WindCountIs0or1 = oldE1WindCount == 0 || oldE1WindCount == 1;
       bool e2WindCountIs0or1 = oldE2WindCount == 0 || oldE2WindCount == 1;
 
-      if ((!IsHotEdge(ae1) && !e1WindCountIs0or1) || (!IsHotEdge(ae2) && !e2WindCountIs0or1)) return null;
+      if ((!IsHotEdge(ae1) && !e1WindCountIs0or1) || 
+        (!IsHotEdge(ae2) && !e2WindCountIs0or1)) return;
 
       // NOW PROCESS THE INTERSECTION ...
 
@@ -1776,11 +1772,11 @@ namespace Clipper2Lib
         }
         else if (oldE1WindCount == 1 && oldE2WindCount == 1)
         {
-          resultOp = null;
+          resultOp = null; 
           switch (_cliptype)
           {
             case ClipType.Union:
-              if (e1Wc2 > 0 && e2Wc2 > 0) return null;
+              if (e1Wc2 > 0 && e2Wc2 > 0) return;
               resultOp = AddLocalMinPoly(ae1, ae2, pt);
               break;
 
@@ -1798,7 +1794,7 @@ namespace Clipper2Lib
               break;
 
             default: // ClipType.Intersection:
-              if (e1Wc2 <= 0 || e2Wc2 <= 0) return null;
+              if (e1Wc2 <= 0 || e2Wc2 <= 0) return;
               resultOp = AddLocalMinPoly(ae1, ae2, pt);
               break;
           }
@@ -1807,8 +1803,6 @@ namespace Clipper2Lib
 #endif
         }
       }
-
-      return resultOp;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1890,7 +1884,7 @@ namespace Clipper2Lib
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AddNewIntersectNode(Active ae1, Active ae2, long topY)
     {
-      if (!InternalClipper.GetIntersectPoint(
+      if (!InternalClipper.GetSegmentIntersectPt(
         ae1.bot, ae1.top, ae2.bot, ae2.top, out Point64 ip))
           ip = new Point64(ae1.curX, topY);
 
@@ -2079,13 +2073,6 @@ namespace Clipper2Lib
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool HorzIsSpike(Active horz)
-    {
-      Point64 nextPt = NextVertex(horz).pt;
-      return (horz.bot.X < horz.top.X) != (horz.top.X < nextPt.X);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void TrimHorz(Active horzEdge, bool preserveCollinear)
     {
       bool wasTrimmed = false;
@@ -2147,12 +2134,6 @@ private void DoHorizontal(Active horz)
         GetCurrYMaximaVertex_Open(horz) :
         GetCurrYMaximaVertex(horz);
 
-      // remove 180 deg.spikes and also simplify
-      // consecutive horizontals when PreserveCollinear = true
-      if (vertex_max != null &&
-        !horzIsOpen && vertex_max != horz.vertexTop)
-        TrimHorz(horz, PreserveCollinear);
-
       bool isLeftToRight =
         ResetHorzDirection(horz, vertex_max, out long leftX, out long rightX);
 
@@ -2176,7 +2157,7 @@ private void DoHorizontal(Active horz)
           if (ae.vertexTop == vertex_max)
           {
             // do this first!!
-            if (IsHotEdge(horz) && IsJoined(ae!)) Split(ae, ae.top);
+            if (IsHotEdge(horz) && IsJoined(ae)) Split(ae, ae.top);
 
             if (IsHotEdge(horz))
             {
@@ -2270,9 +2251,6 @@ private void DoHorizontal(Active horz)
           AddOutPt(horz, horz.top);
 
         UpdateEdgeIntoAEL(horz);
-
-        if (PreserveCollinear && !horzIsOpen && HorzIsSpike(horz))
-          TrimHorz(horz, true);
 
         isLeftToRight = ResetHorzDirection(horz,
           vertex_max, out leftX, out rightX);
@@ -2405,8 +2383,10 @@ private void DoHorizontal(Active horz)
       Point64 pt, bool checkCurrX = false)
     {
       Active? prev = e.prevInAEL;
-      if (prev == null || IsOpen(e) || IsOpen(prev) ||
-        !IsHotEdge(e) || !IsHotEdge(prev)) return;
+      if (prev == null || 
+        !IsHotEdge(e) || !IsHotEdge(prev) || 
+        IsHorizontal(e) || IsHorizontal(prev) ||
+        IsOpen(e) || IsOpen(prev)) return;
       if ((pt.Y < e.top.Y + 2 || pt.Y < prev.top.Y + 2) &&  // avoid trivial joins
         ((e.bot.Y > pt.Y) || (prev.bot.Y > pt.Y))) return;  // (#490)
 
@@ -2432,8 +2412,10 @@ private void DoHorizontal(Active horz)
       Point64 pt, bool checkCurrX = false)
     {
       Active? next = e.nextInAEL;
-      if (IsOpen(e) || !IsHotEdge(e) || IsJoined(e) ||
-        next == null || IsOpen(next) || !IsHotEdge(next)) return; 
+      if (next == null || 
+        !IsHotEdge(e) || !IsHotEdge(next) || 
+        IsHorizontal(e) || IsHorizontal(next) ||
+        IsOpen(e) || IsOpen(next)) return; 
       if ((pt.Y < e.top.Y + 2 || pt.Y < next.top.Y + 2) &&  // avoid trivial joins
         ((e.bot.Y > pt.Y) || (next.bot.Y > pt.Y)))  return; // (#490)
 
@@ -2461,7 +2443,7 @@ private void DoHorizontal(Active horz)
       OutPt op = outrec.pts!;
       do
       {
-        op!.outrec = outrec;
+        op.outrec = outrec;
         op = op.next!;
       } while (op != outrec.pts);
     }
@@ -2540,13 +2522,26 @@ private void DoHorizontal(Active horz)
       return result;
     }
 
+    private int HorzSegSort(HorzSegment? hs1, HorzSegment? hs2)
+    {
+      if (hs1 == null || hs2 == null) return 0;
+      if (hs1.rightOp == null)
+      {
+        return hs2.rightOp == null ? 0 : 1;
+      }
+      else if (hs2.rightOp == null)
+        return -1;
+      else
+        return hs1.leftOp!.pt.X.CompareTo(hs2.leftOp!.pt.X);
+    }
+
     private void ConvertHorzSegsToJoins()
     {
       int k = 0;
       foreach (HorzSegment hs in _horzSegList)
         if (UpdateHorzSegment(hs)) k++;
       if (k < 2) return;
-      _horzSegList.Sort(new HorzSegSorter());
+      _horzSegList.Sort(HorzSegSort);
 
       for (int i = 0; i < k -1; i++)
       {
@@ -2719,7 +2714,7 @@ private void DoHorizontal(Active horz)
         OutRec or2 = GetRealOutRec(j.op2!.outrec)!;
 
         OutPt op1b = j.op1.next!;
-        OutPt op2b = j.op2.prev!;
+        OutPt op2b = j.op2.prev;
         j.op1.next = j.op2;
         j.op2.prev = j.op1;
         op1b.prev = op2b;
@@ -2855,9 +2850,8 @@ private void DoHorizontal(Active horz)
       OutPt prevOp = splitOp.prev;
       OutPt nextNextOp = splitOp.next!.next!;
       outrec.pts = prevOp;
-      OutPt result = prevOp;
 
-      InternalClipper.GetIntersectPoint(
+      InternalClipper.GetSegmentIntersectPt(
           prevOp.pt, splitOp.pt, splitOp.next.pt, nextNextOp.pt, out Point64 ip);
 
 #if USINGZ
@@ -2982,7 +2976,7 @@ private void DoHorizontal(Active horz)
           op2 = op2.next!;
       }
 
-      if (path.Count == 3 && IsVerySmallTriangle(op2)) return false;
+      if (path.Count == 3 && !isOpen && IsVerySmallTriangle(op2)) return false;
       else return true;
     }
 
@@ -2990,8 +2984,8 @@ private void DoHorizontal(Active horz)
     {
       solutionClosed.Clear();
       solutionOpen.Clear();
-      solutionClosed.Capacity = _outrecList.Count;
-      solutionOpen.Capacity = _outrecList.Count;
+      solutionClosed.EnsureCapacity(_outrecList.Count);
+      solutionOpen.EnsureCapacity(_outrecList.Count);
       
       int i = 0;
       // _outrecList.Count is not static here because
@@ -3054,7 +3048,7 @@ private void DoHorizontal(Active horz)
         OutRec? split = GetRealOutRec(_outrecList[i]);
         if (split == null || split == outrec || split.recursiveSplit == outrec) continue;
         split.recursiveSplit = outrec; //#599
-        if (split!.splits != null && CheckSplitOwner(outrec, split.splits)) return true;
+        if (split.splits != null && CheckSplitOwner(outrec, split.splits)) return true;
         if (IsValidOwner(outrec, split) && 
           CheckBounds(split) && 
           split.bounds.Contains(outrec.bounds) &&
@@ -3097,7 +3091,7 @@ private void DoHorizontal(Active horz)
       polytree.Clear();
       solutionOpen.Clear();
       if (_hasOpenPaths)
-        solutionOpen.Capacity = _outrecList.Count;
+        solutionOpen.EnsureCapacity(_outrecList.Count);
 
       int i = 0;
       // _outrecList.Count is not static here because
@@ -3362,10 +3356,10 @@ private void DoHorizontal(Active horz)
       ClearSolutionOnly();
       if (!success) return false;
 
-      solutionClosed.Capacity = solClosed64.Count;
+      solutionClosed.EnsureCapacity(solClosed64.Count);
       foreach (Path64 path in solClosed64)
         solutionClosed.Add(Clipper.ScalePathD(path, _invScale));
-      solutionOpen.Capacity = solOpen64.Count;
+      solutionOpen.EnsureCapacity(solOpen64.Count);
       foreach (Path64 path in solOpen64)
         solutionOpen.Add(Clipper.ScalePathD(path, _invScale));
 
@@ -3402,7 +3396,7 @@ private void DoHorizontal(Active horz)
       if (!success) return false;
       if (oPaths.Count > 0)
       {
-        openPaths.Capacity = oPaths.Count;        
+        openPaths.EnsureCapacity(oPaths.Count);
         foreach (Path64 path in oPaths)
           openPaths.Add(Clipper.ScalePathD(path, _invScale));
       }

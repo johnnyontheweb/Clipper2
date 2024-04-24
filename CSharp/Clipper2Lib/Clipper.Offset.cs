@@ -1,8 +1,8 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  15 November 2023                                                *
+* Date      :  17 April 2024                                                   *
 * Website   :  http://www.angusj.com                                           *
-* Copyright :  Angus Johnson 2010-2023                                         *
+* Copyright :  Angus Johnson 2010-2024                                         *
 * Purpose   :  Path Offset (Inflate/Shrink)                                    *
 * License   :  http://www.boost.org/LICENSE_1_0.txt                            *
 *******************************************************************************/
@@ -10,8 +10,6 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Text.RegularExpressions;
-using Clipper2Lib;
 
 namespace Clipper2Lib
 {
@@ -38,7 +36,6 @@ namespace Clipper2Lib
     private class Group
     {
       internal Paths64 inPaths;
-      internal List<Rect64> boundsList;
       internal JoinType joinType;
       internal EndType endType;
       internal bool pathsReversed;
@@ -54,32 +51,30 @@ namespace Clipper2Lib
         foreach(Path64 path in paths)
           inPaths.Add(Clipper.StripDuplicates(path, isJoined));
 
-        boundsList = new List<Rect64>();
-        GetMultiBounds(inPaths, boundsList, endType);
-        lowestPathIdx = GetLowestPathIdx(boundsList);
-        pathsReversed = false;
         if (endType == EndType.Polygon)
-          pathsReversed = Clipper.Area(inPaths[lowestPathIdx]) < 0;
+        {
+          lowestPathIdx = GetLowestPathIdx(inPaths);
+          // the lowermost path must be an outer path, so if its orientation is negative,
+          // then flag that the whole group is 'reversed' (will negate delta etc.)
+          // as this is much more efficient than reversing every path.
+          pathsReversed = (lowestPathIdx >= 0) && (Clipper.Area(inPaths[lowestPathIdx]) < 0);
+        }
+        else
+        {
+          lowestPathIdx = -1;
+          pathsReversed = false;
+        }
       }
     }
 
     private static readonly double Tolerance = 1.0E-12;
-    private static readonly Rect64 InvalidRect64 =
-      new Rect64(long.MaxValue, long.MaxValue, long.MinValue, long.MinValue);
-    private static readonly RectD InvalidRectD =
-      new RectD(double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
-    private static readonly long MAX_COORD = long.MaxValue >> 2;
-    private static readonly long MIN_COORD = -MAX_COORD;
-
-    private static readonly string
-      coord_range_error = "Error: Coordinate range.";
-
 
     private readonly List<Group> _groupList = new List<Group>();
-    private readonly Path64 inPath = new Path64();
     private Path64 pathOut = new Path64();
     private readonly PathD _normals = new PathD();
-    private readonly Paths64 _solution = new Paths64();
+    private Paths64 _solution = new Paths64();
+    private PolyTree64? _solutionTree;
+
     private double _groupDelta; //*0.5 for open paths; *-1.0 for negative areas
     private double _delta;
     private double _mitLimSqr;
@@ -99,6 +94,15 @@ namespace Clipper2Lib
     public ClipperOffset.DeltaCallback64? DeltaCallback { get; set; }
 
 #if USINGZ
+    internal void ZCB(Point64 bot1, Point64 top1,
+        Point64 bot2, Point64 top2, ref Point64 ip)
+    {
+      if (bot1.Z != 0 &&
+        ((bot1.Z == bot2.Z) || (bot1.Z == top2.Z))) ip.Z = bot1.Z;
+      else if (bot2.Z != 0 && bot2.Z == top1.Z) ip.Z = bot2.Z;
+      else if (top1.Z != 0 && top1.Z == top2.Z) ip.Z = top1.Z;
+      else ZCallback?.Invoke(bot1, top1, bot2, top2, ref ip);
+    }
     public ClipperBase.ZCallback64? ZCallback { get; set; }
 #endif
     public ClipperOffset(double miterLimit = 2.0,
@@ -142,11 +146,22 @@ namespace Clipper2Lib
       return result;
     }
 
+    internal bool CheckPathsReversed()
+    {
+      bool result = false;
+      foreach (Group g in _groupList)
+        if (g.endType == EndType.Polygon)
+        {
+          result = g.pathsReversed;
+          break;
+        }
+      return result;
+    }
+
     private void ExecuteInternal(double delta)
     {
-      _solution.Clear();
       if (_groupList.Count == 0) return;
-      _solution.Capacity = CalcSolutionCapacity();
+      _solution.EnsureCapacity(CalcSolutionCapacity());
 
       // make sure the offset delta is significant
       if (Math.Abs(delta) < 0.5)
@@ -163,24 +178,7 @@ namespace Clipper2Lib
 
       foreach (Group group in _groupList)
         DoGroupOffset(group);
-    }
 
-    internal bool CheckPathsReversed()
-    {
-      bool result = false;
-      foreach (Group g in _groupList)
-        if (g.endType == EndType.Polygon)
-        {
-          result = g.pathsReversed;
-          break;
-        }
-      return result;
-    }
-
-    public void Execute(double delta, Paths64 solution)
-    {
-      solution.Clear();
-      ExecuteInternal(delta);
       if (_groupList.Count == 0) return;
 
       bool pathsReversed = CheckPathsReversed();
@@ -192,30 +190,29 @@ namespace Clipper2Lib
       // the solution should retain the orientation of the input
       c.ReverseSolution = ReverseSolution != pathsReversed;
 #if USINGZ
-      c.ZCallback = ZCallback;
+      c.ZCallback = ZCB;
 #endif
       c.AddSubject(_solution);
-      c.Execute(ClipType.Union, fillRule, solution);
+      if (_solutionTree != null)
+        c.Execute(ClipType.Union, fillRule, _solutionTree);
+      else
+        c.Execute(ClipType.Union, fillRule, _solution);
+
+    }
+
+    public void Execute(double delta, Paths64 solution)
+    {
+      solution.Clear();
+      _solution = solution;
+      ExecuteInternal(delta);
     }
 
     public void Execute(double delta, PolyTree64 solutionTree)
     {
       solutionTree.Clear();
+      _solutionTree = solutionTree;
+      _solution.Clear();
       ExecuteInternal(delta);
-      if (_groupList.Count == 0) return;
-
-      bool pathsReversed = CheckPathsReversed();
-      FillRule fillRule = pathsReversed ? FillRule.Negative : FillRule.Positive;
-      // clean up self-intersections ...
-      Clipper64 c = new Clipper64();
-      c.PreserveCollinear = PreserveCollinear;
-      // the solution should normally retain the orientation of the input
-      c.ReverseSolution = ReverseSolution != pathsReversed;
-#if USINGZ
-      c.ZCallback = ZCallback;
-#endif
-      c.AddSubject(_solution);
-      c.Execute(ClipType.Union, fillRule, solutionTree);
     }
 
 
@@ -237,68 +234,27 @@ namespace Clipper2Lib
     {
       DeltaCallback = deltaCallback;
       Execute(1.0, solution);
-    }
-
-    internal static void GetMultiBounds(Paths64 paths, List<Rect64> boundsList, EndType endType)
-    {
-
-      int minPathLen = (endType == EndType.Polygon) ? 3 : 1;
-      boundsList.Capacity = paths.Count;
-      foreach (Path64 path in paths)
-      {
-        if (path.Count < minPathLen)
-        {
-          boundsList.Add(InvalidRect64);
-          continue;
-        }
-
-        Point64 pt1 = path[0];
-        Rect64 r = new Rect64(pt1.X, pt1.Y, pt1.X, pt1.Y);
-        foreach (Point64 pt in path)
-        {
-          if (pt.Y > r.bottom) r.bottom = pt.Y;
-          else if (pt.Y < r.top) r.top = pt.Y;
-          if (pt.X > r.right) r.right = pt.X;
-          else if (pt.X < r.left) r.left = pt.X;
-        }
-        boundsList.Add(r);
-      }
-    }
-
-    internal static bool ValidateBounds(List<Rect64> boundsList, double delta)
-    {
-      int int_delta = (int)delta;
-
-      Point64 botPt = new Point64(int.MaxValue, int.MinValue);
-      foreach (Rect64 r in boundsList)
-	    {
-        if (!r.IsValid()) continue; // ignore invalid paths
-        else if (r.left < MIN_COORD + int_delta ||
-          r.right > MAX_COORD + int_delta ||
-          r.top < MIN_COORD + int_delta ||
-          r.bottom > MAX_COORD + int_delta) return false;
-      }
-      return true;
-    }
-
-    internal static int GetLowestPathIdx(List<Rect64> boundsList)
+    }    
+    
+    internal static int GetLowestPathIdx(Paths64 paths)
     {
       int result = -1;
       Point64 botPt = new Point64(long.MaxValue, long.MinValue);
-      for (int i = 0; i < boundsList.Count; i++)
+      for (int i = 0; i < paths.Count; ++i)
       {
-        Rect64 r = boundsList[i];
-        if (!r.IsValid()) continue; // ignore invalid paths
-        else if (r.bottom > botPt.Y || (r.bottom == botPt.Y && r.left < botPt.X))
-        {
-          botPt = new Point64(r.left, r.bottom);
+        foreach (Point64 pt in paths[i])
+		    {
+          if ((pt.Y < botPt.Y) ||
+            ((pt.Y == botPt.Y) && (pt.X >= botPt.X))) continue;
           result = i;
+          botPt.X = pt.X;
+          botPt.Y = pt.Y;
         }
       }
-      return result;
+	    return result;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+  [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static PointD TranslatePoint(PointD pt, double dx, double dy)
     {
 #if USINGZ
@@ -406,13 +362,39 @@ namespace Clipper2Lib
       if (j == k)
       {
         double absDelta = Math.Abs(_groupDelta);
-        pt1 = new Point64(path[j].X - absDelta * _normals[j].x, path[j].Y - absDelta * _normals[j].y);
-        pt2 = new Point64(path[j].X + absDelta * _normals[j].x, path[j].Y + absDelta * _normals[j].y);
+#if USINGZ
+        pt1 = new Point64(
+          path[j].X - absDelta * _normals[j].x, 
+          path[j].Y - absDelta * _normals[j].y, path[j].Z);
+        pt2 = new Point64(
+          path[j].X + absDelta * _normals[j].x, 
+          path[j].Y + absDelta * _normals[j].y, path[j].Z);
+#else
+        pt1 = new Point64(
+          path[j].X - absDelta * _normals[j].x,
+          path[j].Y - absDelta * _normals[j].y);
+        pt2 = new Point64(
+          path[j].X + absDelta * _normals[j].x,
+          path[j].Y + absDelta * _normals[j].y);
+#endif
       }
       else
       {
-        pt1 = new Point64(path[j].X + _groupDelta * _normals[k].x, path[j].Y + _groupDelta * _normals[k].y);
-        pt2 = new Point64(path[j].X + _groupDelta * _normals[j].x, path[j].Y + _groupDelta * _normals[j].y);
+#if USINGZ
+        pt1 = new Point64(
+          path[j].X + _groupDelta * _normals[k].x,
+          path[j].Y + _groupDelta * _normals[k].y, path[j].Z);
+        pt2 = new Point64(
+          path[j].X + _groupDelta * _normals[j].x,
+          path[j].Y + _groupDelta * _normals[j].y, path[j].Z);
+#else
+        pt1 = new Point64(
+          path[j].X + _groupDelta * _normals[k].x,
+          path[j].Y + _groupDelta * _normals[k].y);
+        pt2 = new Point64(
+          path[j].X + _groupDelta * _normals[j].x,
+          path[j].Y + _groupDelta * _normals[j].y);
+#endif
       }
       pathOut.Add(pt1);
       pathOut.Add(pt2);
@@ -471,7 +453,7 @@ namespace Clipper2Lib
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void DoMiter(Group group, Path64 path, int j, int k, double cosA)
+    private void DoMiter(Path64 path, int j, int k, double cosA)
     {
       double q = _groupDelta / (cosA + 1);
 #if USINGZ
@@ -531,7 +513,7 @@ namespace Clipper2Lib
     {
       int cnt = path.Count;
       _normals.Clear();
-      _normals.Capacity = cnt;
+      _normals.EnsureCapacity(cnt);
 
       for (int i = 0; i < cnt - 1; i++)
         _normals.Add(GetUnitNormal(path[i], path[i + 1]));
@@ -540,6 +522,8 @@ namespace Clipper2Lib
 
     private void OffsetPoint(Group group, Path64 path, int j, ref int k)
     {
+      if (path[j] == path[k]) { k = j; return; }
+
       // Let A = change in angle where edges join
       // A == 0: ie no change in angle (flat join)
       // A == PI: edges 'spike'
@@ -561,28 +545,31 @@ namespace Clipper2Lib
         return;
       }
 
-      if (cosA > -0.99 && (sinA * _groupDelta < 0)) // test for concavity first (#593)
+      if (cosA > -0.999 && (sinA * _groupDelta < 0)) // test for concavity first (#593)
       {
         // is concave
         pathOut.Add(GetPerpendic(path[j], _normals[k]));
-        // this extra point is the only (simple) way to ensure that
-        // path reversals are fully cleaned with the trailing clipper
-        pathOut.Add(path[j]); // (#405)
+        // this extra point is the only simple way to ensure that path reversals
+        // (ie over-shrunk paths) are fully cleaned out with the trailing union op.
+        // However it's probably safe to skip this whenever an angle is almost flat.
+        if (cosA < 0.99) pathOut.Add(path[j]); // (#405)
         pathOut.Add(GetPerpendic(path[j], _normals[j]));
       }
-      else if (cosA > 0.999)
-        DoMiter(group, path, j, k, cosA);
+      else if ((cosA > 0.999) && (_joinType != JoinType.Round))
+      {
+        // almost straight - less than 2.5 degree (#424, #482, #526 & #724) 
+        DoMiter(path, j, k, cosA);
+      }
       else if (_joinType == JoinType.Miter)
       {
-        // miter unless the angle is so acute the miter would exceeds ML
-        if (cosA > _mitLimSqr - 1) DoMiter(group, path, j, k, cosA);
+        // miter unless the angle is sufficiently acute to exceed ML
+        if (cosA > _mitLimSqr - 1) DoMiter(path, j, k, cosA);
         else DoSquare(path, j, k);
       }
-      else if (cosA > 0.99 || _joinType == JoinType.Bevel)
-        //angle less than 8 degrees or a squared join
-        DoBevel(path, j, k);
       else if (_joinType == JoinType.Round)
         DoRound(path, j, k, Math.Atan2(sinA, cosA));
+      else if (_joinType == JoinType.Bevel)
+        DoBevel(path, j, k);
       else
         DoSquare(path, j, k);
 
@@ -662,7 +649,7 @@ namespace Clipper2Lib
         }
 
       // offset the left side going back
-      for (int i = highI, k = 0; i > 0; i--)
+      for (int i = highI -1, k = highI; i > 0; i--)
         OffsetPoint(group, path, i, ref k);
 
       _solution.Add(pathOut);
@@ -672,27 +659,26 @@ namespace Clipper2Lib
     {
       if (group.endType == EndType.Polygon)
       {
-        if (group.lowestPathIdx < 0) return;
-        //if (area == 0) return; // probably unhelpful (#430)
+        // a straight path (2 points) can now also be 'polygon' offset 
+        // where the ends will be treated as (180 deg.) joins
+        if (group.lowestPathIdx < 0) _delta = Math.Abs(_delta);
         _groupDelta = (group.pathsReversed) ? -_delta : _delta;
       }
       else
-        _groupDelta = Math.Abs(_delta);// * 0.5;
+        _groupDelta = Math.Abs(_delta);
 
       double absDelta = Math.Abs(_groupDelta);
-      if (!ValidateBounds(group.boundsList, absDelta))
-          throw new Exception(coord_range_error);
 
       _joinType = group.joinType;
       _endType = group.endType;
 
       if (group.joinType == JoinType.Round || group.endType == EndType.Round)
       {
-        // calculate a sensible number of steps (for 360 deg for the given offset
-        // arcTol - when fArcTolerance is undefined (0), the amount of
-        // curve imprecision that's allowed is based on the size of the
-        // offset (delta). Obviously very large offsets will almost always
-        // require much less precision. See also offset_triginometry2.svg
+        // calculate the number of steps required to approximate a circle
+        // (see http://www.angusj.com/clipper2/Docs/Trigonometry.htm)
+        // arcTol - when arc_tolerance_ is undefined (0) then curve imprecision
+        // will be relative to the size of the offset (delta). Obviously very
+        //large offsets will almost always require much less precision.
         double arcTol = ArcTolerance > 0.01 ?
           ArcTolerance :              
           Math.Log10(2 + absDelta) * InternalClipper.defaultArcTolerance; 
@@ -703,35 +689,39 @@ namespace Clipper2Lib
         _stepsPerRad = stepsPer360 / (2 * Math.PI);
       }
 
-      int i = 0;
-      foreach (Path64 p in group.inPaths)
+      using List<Path64>.Enumerator pathIt = group.inPaths.GetEnumerator();
+      while (pathIt.MoveNext())
       {
-        Rect64 pathBounds = group.boundsList[i++];
-        if (!pathBounds.IsValid()) continue;
-
-        int cnt = p.Count;
-        if ((cnt == 0) || ((cnt < 3) && (_endType == EndType.Polygon))) 
-          continue;
+        Path64 p = pathIt.Current!;
 
         pathOut = new Path64();
+        int cnt = p.Count;
+
         if (cnt == 1)
         {
           Point64 pt = p[0];
-          
+
+          if (DeltaCallback != null)
+          {
+            _groupDelta = DeltaCallback(p, _normals, 0, 0);
+            if (group.pathsReversed) _groupDelta = -_groupDelta;
+            absDelta = Math.Abs(_groupDelta);
+          }
+
           // single vertex so build a circle or square ...
           if (group.endType == EndType.Round)
           {
             double r = absDelta;
-            int steps = (int)Math.Ceiling(_stepsPerRad * 2 * Math.PI);
+            int steps = (int) Math.Ceiling(_stepsPerRad * 2 * Math.PI);
             pathOut = Clipper.Ellipse(pt, r, r, steps);
 #if USINGZ
             pathOut = InternalClipper.SetZ(pathOut, pt.Z);
-#endif      
+#endif
           }
           else
           {
             int d = (int) Math.Ceiling(_groupDelta);
-            Rect64 r = new Rect64(pt.X - d, pt.Y - d,  pt.X + d, pt.Y + d);
+            Rect64 r = new Rect64(pt.X - d, pt.Y - d, pt.X + d, pt.Y + d);
             pathOut = r.AsPath();
 #if USINGZ
             pathOut = InternalClipper.SetZ(pathOut, pt.Z);
@@ -739,16 +729,12 @@ namespace Clipper2Lib
           }
           _solution.Add(pathOut);
           continue;
-        } // end of offsetting a single (open path) point 
+        } // end of offsetting a single point 
 
-        // when shrinking, then make sure the path can shrink that far (#593)
-        if (_groupDelta < 0 &&
-          Math.Min(pathBounds.Width, pathBounds.Height) < -_groupDelta * 2)
-            continue;
 
         if (cnt == 2 && group.endType == EndType.Joined)
-          _endType = (group.joinType == JoinType.Round) ? 
-            EndType.Round : 
+          _endType = (group.joinType == JoinType.Round) ?
+            EndType.Round :
             EndType.Square;
 
         BuildNormals(p);

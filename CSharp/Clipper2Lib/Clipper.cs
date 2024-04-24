@@ -1,6 +1,6 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  1 October 2023                                                  *
+* Date      :  18 October 2023                                                 *
 * Website   :  http://www.angusj.com                                           *
 * Copyright :  Angus Johnson 2010-2023                                         *
 * Purpose   :  This module contains simple functions that will likely cover    *
@@ -589,7 +589,7 @@ namespace Clipper2Lib
         if (pt.y < result.top) result.top = pt.y;
         if (pt.y > result.bottom) result.bottom = pt.y;
       }
-      return result.left == double.MaxValue ? new RectD() : result;
+      return Math.Abs(result.left - double.MaxValue) < InternalClipper.floatingPointTolerance ? new RectD() : result;
     }
 
     public static RectD GetBounds(PathsD paths)
@@ -603,7 +603,7 @@ namespace Clipper2Lib
           if (pt.y < result.top) result.top = pt.y;
           if (pt.y > result.bottom) result.bottom = pt.y;
         }
-      return result.left == double.MaxValue ? new RectD() : result;
+      return Math.Abs(result.left - double.MaxValue) < InternalClipper.floatingPointTolerance ? new RectD() : result;
     }
 
     public static Path64 MakePath(int[] arr)
@@ -632,6 +632,26 @@ namespace Clipper2Lib
         p.Add(new PointD(arr[i * 2], arr[i * 2 + 1]));
       return p;
     }
+
+#if USINGZ
+    public static Path64 MakePathZ(long[] arr)
+    {
+      int len = arr.Length / 3;
+      Path64 p = new Path64(len);
+      for (int i = 0; i < len; i++)
+        p.Add(new Point64(arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]));
+      return p;
+    }
+    public static PathD MakePathZ(double[] arr)
+    {
+      int len = arr.Length / 3;
+      PathD p = new PathD(len);
+      for (int i = 0; i < len; i++)
+        p.Add(new PointD(arr[i * 3], arr[i * 3 + 1], (long)arr[i * 3 + 2]));
+      return p;
+    }
+#endif
+
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static double Sqr(double value)
@@ -850,8 +870,8 @@ namespace Clipper2Lib
       return current;
     }
 
-    public static Path64 SimplifyPath(Path64 path,
-      double epsilon, bool isClosedPath = false)
+      public static Path64 SimplifyPath(Path64 path,
+      double epsilon, bool isClosedPath = true)
     {
       int len = path.Count, high = len - 1;
       double epsSqr = Sqr(epsilon);
@@ -859,7 +879,7 @@ namespace Clipper2Lib
 
       bool[] flags = new bool[len];
       double[] dsq = new double[len];
-      int curr = 0, prev, start, next, prior2, next2;
+      int curr = 0, prev, start, next, prior2;
 
       if (isClosedPath)
       {
@@ -893,24 +913,21 @@ namespace Clipper2Lib
 
         if (dsq[next] < dsq[curr])
         {
-          flags[next] = true;
-          next = GetNext(next, high, ref flags);
-          next2 = GetNext(next, high, ref flags);
-          dsq[curr] = PerpendicDistFromLineSqrd(path[curr], path[prev], path[next]);
-          if (next != high || isClosedPath)
-            dsq[next] = PerpendicDistFromLineSqrd(path[next], path[curr], path[next2]);
+          prior2 = prev;
+          prev = curr;
           curr = next;
+          next = GetNext(next, high, ref flags);
         }
         else
-        {
-          flags[curr] = true;
-          curr = next;
-          next = GetNext(next, high, ref flags);
           prior2 = GetPrior(prev, high, ref flags);
+
+        flags[curr] = true;
+        curr = next;
+        next = GetNext(next, high, ref flags);
+        if (isClosedPath || ((curr != high) && (curr != 0)))
           dsq[curr] = PerpendicDistFromLineSqrd(path[curr], path[prev], path[next]);
-          if (prev != 0 || isClosedPath)
-            dsq[prev] = PerpendicDistFromLineSqrd(path[prev], path[prior2], path[curr]);
-        }
+        if (isClosedPath || ((prev != 0) && (prev != high)))
+          dsq[prev] = PerpendicDistFromLineSqrd(path[prev], path[prior2], path[curr]);
       }
       Path64 result = new Path64(len);
       for (int i = 0; i < len; i++)
@@ -919,7 +936,7 @@ namespace Clipper2Lib
     }
 
     public static Paths64 SimplifyPaths(Paths64 paths,
-      double epsilon, bool isClosedPaths = false)
+      double epsilon, bool isClosedPaths = true)
     {
       Paths64 result = new Paths64(paths.Count);
       foreach (Path64 path in paths)
@@ -928,7 +945,7 @@ namespace Clipper2Lib
     }
 
     public static PathD SimplifyPath(PathD path,
-      double epsilon, bool isOpenPath = false)
+      double epsilon, bool isClosedPath = true)
     {
       int len = path.Count, high = len - 1;
       double epsSqr = Sqr(epsilon);
@@ -936,16 +953,16 @@ namespace Clipper2Lib
 
       bool[] flags = new bool[len];
       double[] dsq = new double[len];
-      int curr = 0, prev, start, next, prior2, next2;
-      if (isOpenPath)
-      {
-        dsq[0] = double.MaxValue;
-        dsq[high] = double.MaxValue;
-      }
-      else
+      int curr = 0, prev, start, next, prior2;
+      if (isClosedPath)
       {
         dsq[0] = PerpendicDistFromLineSqrd(path[0], path[high], path[1]);
         dsq[high] = PerpendicDistFromLineSqrd(path[high], path[0], path[high - 1]);
+      }
+      else
+      {
+        dsq[0] = double.MaxValue;
+        dsq[high] = double.MaxValue;
       }
       for (int i = 1; i < high; ++i)
         dsq[i] = PerpendicDistFromLineSqrd(path[i], path[i - 1], path[i + 1]);
@@ -968,24 +985,21 @@ namespace Clipper2Lib
 
         if (dsq[next] < dsq[curr])
         {
-          flags[next] = true;
-          next = GetNext(next, high, ref flags);
-          next2 = GetNext(next, high, ref flags);
-          dsq[curr] = PerpendicDistFromLineSqrd(path[curr], path[prev], path[next]);
-          if (next != high || !isOpenPath)
-            dsq[next] = PerpendicDistFromLineSqrd(path[next], path[curr], path[next2]);
+          prior2 = prev;
+          prev = curr;
           curr = next;
+          next = GetNext(next, high, ref flags);
         }
-        else
-        {
-          flags[curr] = true;
-          curr = next;
-          next = GetNext(next, high, ref flags);
+        else 
           prior2 = GetPrior(prev, high, ref flags);
+
+        flags[curr] = true;
+        curr = next;
+        next = GetNext(next, high, ref flags);
+        if (isClosedPath || ((curr != high) && (curr != 0)))
           dsq[curr] = PerpendicDistFromLineSqrd(path[curr], path[prev], path[next]);
-          if (prev != 0 || !isOpenPath)
-            dsq[prev] = PerpendicDistFromLineSqrd(path[prev], path[prior2], path[curr]);
-        }
+        if (isClosedPath || ((prev != 0) && (prev != high)))
+          dsq[prev] = PerpendicDistFromLineSqrd(path[prev], path[prior2], path[curr]);
       }
       PathD result = new PathD(len);
       for (int i = 0; i < len; i++)
@@ -994,11 +1008,11 @@ namespace Clipper2Lib
     }
 
     public static PathsD SimplifyPaths(PathsD paths,
-      double epsilon, bool isOpenPath = false)
+      double epsilon, bool isClosedPath = true)
     {
       PathsD result = new PathsD(paths.Count);
       foreach (PathD path in paths)
-        result.Add(SimplifyPath(path, epsilon, isOpenPath));
+        result.Add(SimplifyPath(path, epsilon, isClosedPath));
       return result;
     }
 
@@ -1040,8 +1054,10 @@ namespace Clipper2Lib
       else
       {
         while (result.Count > 2 && InternalClipper.CrossProduct(
-          result[result.Count - 1], result[result.Count - 2], result[0]) == 0)
-            result.RemoveAt(result.Count - 1);
+                 result[result.Count - 1], result[result.Count - 2], result[0]) == 0)
+        {
+          result.RemoveAt(result.Count - 1);
+        }
         if (result.Count < 3)
           result.Clear();
       }

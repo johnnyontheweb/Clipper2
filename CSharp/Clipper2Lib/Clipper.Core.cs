@@ -1,8 +1,8 @@
 ﻿/*******************************************************************************
 * Author    :  Angus Johnson                                                   *
-* Date      :  1 October 2023                                                  *
+* Date      :  24 March 2024                                                   *
 * Website   :  http://www.angusj.com                                           *
-* Copyright :  Angus Johnson 2010-2023                                         *
+* Copyright :  Angus Johnson 2010-2024                                         *
 * Purpose   :  Core structures and functions for the Clipper Library           *
 * License   :  http://www.boost.org/LICENSE_1_0.txt                            *
 *******************************************************************************/
@@ -84,7 +84,7 @@ namespace Clipper2Lib
       return new Point64(lhs.X - rhs.X, lhs.Y - rhs.Y, lhs.Z - rhs.Z);
     }
 
-    public override string ToString()
+    public readonly override string ToString()
     {
       return $"{X},{Y},{Z} "; // nb: trailing space
     }
@@ -215,7 +215,7 @@ namespace Clipper2Lib
       this.z = z;
     }
 
-    public string ToString(int precision = 2)
+    public readonly string ToString(int precision = 2)
     {
       return string.Format($"{{0:F{precision}}},{{1:F{precision}}},{{2:D}}", x,y,z);
     }
@@ -473,7 +473,6 @@ namespace Clipper2Lib
 
   public class Path64 : List<Point64> 
   {
-    private Path64() : base() { }
     public Path64(int capacity = 0) : base(capacity) { }
     public Path64(IEnumerable<Point64> path) : base(path) { }
     public override string ToString()
@@ -487,35 +486,32 @@ namespace Clipper2Lib
 
   public class Paths64 : List<Path64>
   {
-    private Paths64() : base() { }
     public Paths64(int capacity = 0) : base(capacity) { }
     public Paths64(IEnumerable<Path64> paths) : base(paths) { }
     public override string ToString()
     {
       string s = "";
       foreach (Path64 p in this)
-        s = s + p.ToString() + "\n";
+        s = s + p + "\n";
       return s;
     }
   }
 
   public class PathD : List<PointD>
   {
-    private PathD() : base() { }
     public PathD(int capacity = 0) : base(capacity) { }
     public PathD(IEnumerable<PointD> path) : base(path) { }
     public string ToString(int precision = 2)
     {
       string s = "";
       foreach (PointD p in this)
-        s = s + p.ToString(precision) + " ";
+        s = s + p.ToString(precision) + ", ";
       return s;
     }
   }
 
   public class PathsD : List<PathD>
   {
-    private PathsD() : base() { }
     public PathsD(int capacity = 0) : base(capacity) { }
     public PathsD(IEnumerable<PathD> paths) : base(paths) { }
     public string ToString(int precision = 2)
@@ -634,7 +630,7 @@ namespace Clipper2Lib
 
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool GetIntersectPoint(Point64 ln1a,
+    public static bool GetSegmentIntersectPt(Point64 ln1a,
       Point64 ln1b, Point64 ln2a, Point64 ln2b, out Point64 ip)
     {
       double dy1 = (ln1b.Y - ln1a.Y);

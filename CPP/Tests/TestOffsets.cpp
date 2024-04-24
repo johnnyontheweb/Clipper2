@@ -1,32 +1,26 @@
 #include <gtest/gtest.h>
 #include "clipper2/clipper.offset.h"
 #include "ClipFileLoad.h"
-#include <algorithm>
 
 using namespace Clipper2Lib;
-TEST(Clipper2Tests, TestOffsets) { 
-  std::ifstream ifs("Offsets.txt");
-  if(!ifs.good()) return;
 
+TEST(Clipper2Tests, TestOffsets) {
+  std::ifstream ifs("Offsets.txt");
+  ASSERT_TRUE(ifs.good());
   for (int test_number = 1; test_number <= 2; ++test_number)
   {
     ClipperOffset co;
-
     Paths64 subject, subject_open, clip;
     Paths64 solution, solution_open;
     ClipType ct = ClipType::None;
     FillRule fr = FillRule::NonZero;
     int64_t stored_area = 0, stored_count = 0;
-
     ASSERT_TRUE(LoadTestNum(ifs, test_number, subject, subject_open, clip, stored_area, stored_count, ct, fr));
-
     co.AddPaths(subject, JoinType::Round, EndType::Polygon);
     Paths64 outputs;
     co.Execute(1, outputs);
-
     // is the sum total area of the solution is positive
     const auto outer_is_positive = Area(outputs) > 0;
-
     // there should be exactly one exterior path
     const auto is_positive_func = IsPositive<int64_t>;
     const auto is_positive_count = std::count_if(
@@ -40,31 +34,23 @@ TEST(Clipper2Tests, TestOffsets) {
   }
   ifs.close();
 }
-
-
-Point64 MidPoint(const Point64& p1, const Point64& p2)
+static Point64 MidPoint(const Point64& p1, const Point64& p2)
 {
   Point64 result;
   result.x = (p1.x + p2.x) / 2;
   result.y = (p1.y + p2.y) / 2;
   return result;
 }
-
 TEST(Clipper2Tests, TestOffsets2) { // see #448 & #456
-
   double scale = 10, delta = 10 * scale, arc_tol = 0.25 * scale;
-
   Paths64 subject, solution;
   ClipperOffset c;
   subject.push_back(MakePath({ 50,50, 100,50, 100,150, 50,150, 0,100 }));
-
   int err;
   subject = ScalePaths<int64_t, int64_t>(subject, scale, err);
-
   c.AddPaths(subject, JoinType::Round, EndType::Polygon);
   c.ArcTolerance(arc_tol);
   c.Execute(delta, solution);
-
   double min_dist = delta * 2, max_dist = 0;
   for (const Point64& subjPt : subject[0])
   {
@@ -76,14 +62,13 @@ TEST(Clipper2Tests, TestOffsets2) { // see #448 & #456
       if (d < delta * 2)
       {
         if (d < min_dist) min_dist = d;
-        if (d > max_dist) max_dist = d;
+        if (d> max_dist) max_dist = d;
       }
       prevPt = pt;
     }
   }
-
   EXPECT_GE(min_dist + 1, delta - arc_tol); // +1 for rounding errors
-  EXPECT_LE(solution[0].size(), 21); 
+  EXPECT_LE(solution[0].size(), 21);
 }
 
 TEST(Clipper2Tests, TestOffsets3) // see #424
@@ -108,7 +93,6 @@ TEST(Clipper2Tests, TestOffsets3) // see #424
    {1602758902, 1378489467}, {1618990858, 1376350372}, {1615058698, 1344085688},
    {1603230761, 1345700495}, {1598648484, 1346329641}, {1598931599, 1348667965},
    {1596698132, 1348993024}, {1595775386, 1342722540} }};
-
   Paths64 solution = InflatePaths(subjects, -209715, JoinType::Miter, EndType::Polygon);
   EXPECT_LE(solution[0].size() - subjects[0].size(), 1);
 }
@@ -119,33 +103,26 @@ TEST(Clipper2Tests, TestOffsets4) // see #482
     {40000, 0}, {40000, 50000}, {0, 50000}, {0, 0}} };
   Paths64 solution = InflatePaths(paths, -5000,
     JoinType::Square, EndType::Polygon);
-  std::cout << solution[0].size() << std::endl;
-
+  //std::cout << solution[0].size() << std::endl;
   EXPECT_EQ(solution[0].size(), 5);
-
   paths = { { {0, 0}, {20000, 400},
     {40000, 0}, {40000, 50000}, {0, 50000}, {0, 0}} };
   solution = InflatePaths(paths, -5000,
     JoinType::Square, EndType::Polygon);
-  std::cout << solution[0].size() << std::endl;
-
+  //std::cout << solution[0].size() << std::endl;
   EXPECT_EQ(solution[0].size(), 5);
-
   paths = { { {0, 0}, {20000, 400},
     {40000, 0}, {40000, 50000}, {0, 50000}, {0, 0}} };
   solution = InflatePaths(paths, -5000,
-    JoinType::Round, EndType::Polygon);
-  std::cout << solution[0].size() << std::endl;
-
-  EXPECT_EQ(solution[0].size(), 5);
-
+    JoinType::Round, EndType::Polygon, 2, 100);
+  //std::cout << solution[0].size() << std::endl;
+  EXPECT_GT(solution[0].size(), 5);
   paths = { { {0, 0}, {20000, 1500},
     {40000, 0}, {40000, 50000}, {0, 50000}, {0, 0}} };
   solution = InflatePaths(paths, -5000,
-    JoinType::Round, EndType::Polygon);
-  std::cout << solution[0].size() << std::endl;
-
-  EXPECT_GT(solution[0].size(), 6);
+    JoinType::Round, EndType::Polygon, 2, 100);
+  //std::cout << solution[0].size() << std::endl;
+  EXPECT_GT(solution[0].size(), 5);
 }
 
 TEST(Clipper2Tests, TestOffsets5) // modified from #593 (tests offset clean up)
@@ -372,17 +349,14 @@ TEST(Clipper2Tests, TestOffsets5) // modified from #593 (tests offset clean up)
       }),
     MakePath({ -47877,-47877, 84788,-47877, 84788,81432, -47877,81432 })
   };
-
   Paths64 solution = InflatePaths(subject, -10000, JoinType::Round, EndType::Polygon);
   EXPECT_EQ(solution.size(), 2);
 }
-
 
 TEST(Clipper2Tests, TestOffsets6) // also modified from #593 (tests rounded ends)
 {
   Paths64 subjects = {
     {{620,620}, {-620,620}, {-620,-620}, {620,-620}},
-
     {{20,-277}, {42,-275}, {59,-272}, {80,-266}, {97,-261}, {114,-254},
     {135,-243}, {149,-235}, {167,-222}, {182,-211}, {197,-197},
     {212,-181}, {223,-167}, {234,-150}, {244,-133}, {253,-116},
@@ -391,17 +365,296 @@ TEST(Clipper2Tests, TestOffsets6) // also modified from #593 (tests rounded ends
     {223,-167}, {212,-181}, {197,-197}, {182,-211}, {168,-222}, {152,-233},
     {135,-243}, {114,-254}, {97,-261}, {80,-267}, {59,-272}, {42,-275}, {20,-278}}
   };
-
   const double offset = -50;
   Clipper2Lib::ClipperOffset offseter;
   Clipper2Lib::Paths64 tmpSubject;
-
   offseter.AddPaths(subjects, Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Polygon);
   Clipper2Lib::Paths64 solution;
   offseter.Execute(offset, solution);
-  
   EXPECT_EQ(solution.size(), 2);
-
   double area = Area<int64_t>(solution[1]);
   EXPECT_LT(area, -47500);
 }
+
+TEST(Clipper2Tests, TestOffsets7) // (#593 & #715)
+{
+  Paths64 solution;
+  Paths64 subject = { MakePath({0,0, 100,0, 100,100, 0,100}) };
+  solution = InflatePaths(subject, -50, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 0);
+  subject.push_back(MakePath({ 40,60, 60,60, 60,40, 40,40 }));
+  solution = InflatePaths(subject, 10, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 1);
+  reverse(subject[0].begin(), subject[0].end());
+  reverse(subject[1].begin(), subject[1].end());
+  solution = InflatePaths(subject, 10, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 1);
+  subject.resize(1);
+  solution = InflatePaths(subject, -50, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 0);
+}
+
+struct OffsetQual
+{
+  PointD smallestInSub;   // smallestInSub & smallestInSol are the points in subject and solution
+  PointD smallestInSol;   // that define the place that most falls short of the expected offset
+  PointD largestInSub;    // largestInSub & largestInSol are the points in subject and solution
+  PointD largestInSol;    // that define the place that most exceeds the expected offset
+};
+
+template<typename T>
+inline PointD GetClosestPointOnSegment(const PointD& offPt,
+  const Point<T>& seg1, const Point<T>& seg2)
+{
+  if (seg1.x == seg2.x && seg1.y == seg2.y) return PointD(seg1);
+  double dx = static_cast<double>(seg2.x - seg1.x);
+  double dy = static_cast<double>(seg2.y - seg1.y);
+  double q = (
+    (offPt.x - static_cast<double>(seg1.x)) * dx +
+    (offPt.y - static_cast<double>(seg1.y)) * dy) /
+    (Sqr(dx) + Sqr(dy));
+  q = (q < 0) ? 0 : (q > 1) ? 1 : q;
+  return PointD(
+    static_cast<double>(seg1.x) + (q * dx),
+    static_cast<double>(seg1.y) + (q * dy));
+}
+
+template<typename T>
+static OffsetQual GetOffsetQuality(const Path<T>& subject, const Path<T>& solution, const double delta)
+{
+  if (!subject.size() || !solution.size()) return OffsetQual();
+  double desiredDistSqr = delta * delta;
+  double smallestSqr = desiredDistSqr, largestSqr = desiredDistSqr;
+  double deviationsSqr = 0;
+  OffsetQual oq;
+  const size_t subVertexCount = 4; // 1 .. 100 :)
+  const double subVertexFrac = 1.0 / subVertexCount;
+  Point<T> solPrev = solution[solution.size() - 1];
+  for (const Point<T>& solPt0 : solution)
+  {
+    for (size_t i = 0; i < subVertexCount; ++i)
+    {
+      // divide each edge in solution into series of sub-vertices (solPt),
+      PointD solPt = PointD(
+        static_cast<double>(solPrev.x) + static_cast<double>(solPt0.x - solPrev.x) * subVertexFrac * i,
+        static_cast<double>(solPrev.y) + static_cast<double>(solPt0.y - solPrev.y) * subVertexFrac * i);
+      // now find the closest point in subject to each of these solPt.
+      PointD closestToSolPt;
+      double closestDistSqr = std::numeric_limits<double>::infinity();
+      Point<T> subPrev = subject[subject.size() - 1];
+      for (size_t i = 0; i < subject.size(); ++i)
+      {
+        PointD closestPt = ::GetClosestPointOnSegment(solPt, subject[i], subPrev);
+        subPrev = subject[i];
+        const double sqrDist = DistanceSqr(closestPt, solPt);
+        if (sqrDist < closestDistSqr) {
+          closestDistSqr = sqrDist;
+          closestToSolPt = closestPt;
+        };
+      }
+      // we've now found solPt's closest pt in subject (closestToSolPt).
+      // but how does the distance between these 2 points compare with delta
+      // ideally - Distance(closestToSolPt, solPt) == delta;
+      // see how this distance compares with every other solPt
+      if (closestDistSqr < smallestSqr) {
+        smallestSqr = closestDistSqr;
+        oq.smallestInSub = closestToSolPt;
+        oq.smallestInSol = solPt;
+      }
+      if (closestDistSqr > largestSqr) {
+        largestSqr = closestDistSqr;
+        oq.largestInSub = closestToSolPt;
+        oq.largestInSol = solPt;
+      }
+    }
+    solPrev = solPt0;
+  }
+  return oq;
+}
+
+TEST(Clipper2Tests, TestOffsets8) // (#724)
+{
+  Paths64 subject = { MakePath({
+       91759700, -49711991,    83886095, -50331657,
+       -872415388, -50331657,  -880288993, -49711991,  -887968725, -47868251,
+       -895265482, -44845834,  -901999593, -40719165,  -908005244, -35589856,
+       -913134553, -29584205,  -917261224, -22850094,  -920283639, -15553337,
+       -922127379, -7873605,   -922747045, 0,          -922747045, 1434498600,
+       -922160557, 1442159790, -920414763, 1449642437, -917550346, 1456772156,
+       -913634061, 1463382794, -908757180, 1469320287, -903033355, 1474446264,
+       -896595982, 1478641262, -889595081, 1481807519, -882193810, 1483871245,
+       -876133965, 1484596521, -876145751, 1484713389, -875781839, 1485061090,
+       -874690056, 1485191762, -874447580, 1485237014, -874341490, 1485264094,
+       -874171960, 1485309394, -873612294, 1485570372, -873201878, 1485980788,
+       -872941042, 1486540152, -872893274, 1486720070, -872835064, 1487162210,
+       -872834788, 1487185500, -872769052, 1487406000, -872297948, 1487583168,
+       -871995958, 1487180514, -871995958, 1486914040, -871908872, 1486364208,
+       -871671308, 1485897962, -871301302, 1485527956, -870835066, 1485290396,
+       -870285226, 1485203310, -868659019, 1485203310, -868548443, 1485188472,
+       -868239649, 1484791011, -868239527, 1484783879, -838860950, 1484783879,
+       -830987345, 1484164215, -823307613, 1482320475, -816010856, 1479298059,
+       -809276745, 1475171390, -803271094, 1470042081, -752939437, 1419710424,
+       -747810128, 1413704773, -743683459, 1406970662, -740661042, 1399673904,
+       -738817302, 1391994173, -738197636, 1384120567, -738197636, 1244148246,
+       -738622462, 1237622613, -739889768, 1231207140, -802710260, 995094494,
+       -802599822, 995052810,  -802411513, 994586048,  -802820028, 993050638,
+       -802879992, 992592029,  -802827240, 992175479,  -802662144, 991759637,
+       -802578556, 991608039,  -802511951, 991496499,  -801973473, 990661435,
+       -801899365, 990554757,  -801842657, 990478841,  -801770997, 990326371,
+       -801946911, 989917545,  -801636397, 989501855,  -801546099, 989389271,
+       -800888669, 988625013,  -800790843, 988518907,  -800082405, 987801675,
+       -799977513, 987702547,  -799221423, 987035738,  -799109961, 986944060,
+       -798309801, 986330832,  -798192297, 986247036,  -797351857, 985690294,
+       -797228867, 985614778,  -796352124, 985117160,  -796224232, 985050280,
+       -795315342, 984614140,  -795183152, 984556216,  -794246418, 984183618,
+       -794110558, 984134924,  -793150414, 983827634,  -793011528, 983788398,
+       -792032522, 983547874,  -791891266, 983518284,  -790898035, 983345662,
+       -790755079, 983325856,  -789752329, 983221956,  -789608349, 983212030,
+       -787698545, 983146276,  -787626385, 983145034,  -536871008, 983145034,
+       -528997403, 982525368,  -521317671, 980681627,  -514020914, 977659211,
+       -507286803, 973532542,  -501281152, 968403233,  -496151843, 962397582,
+       -492025174, 955663471,  -489002757, 948366714,  -487159017, 940686982,
+       -486539351, 932813377,  -486539351, 667455555,  -486537885, 667377141,
+       -486460249, 665302309,  -486448529, 665145917,  -486325921, 664057737,
+       -486302547, 663902657,  -486098961, 662826683,  -486064063, 662673784,
+       -485780639, 661616030,  -485734413, 661466168,  -485372735, 660432552,
+       -485315439, 660286564,  -484877531, 659282866,  -484809485, 659141568,
+       -484297795, 658173402,  -484219379, 658037584,  -483636768, 657110363,
+       -483548422, 656980785,  -482898150, 656099697,  -482800368, 655977081,
+       -482086070, 655147053,  -481979398, 655032087,  -481205068, 654257759,
+       -481090104, 654151087,  -480260074, 653436789,  -480137460, 653339007,
+       -479256372, 652688735,  -479126794, 652600389,  -478199574, 652017779,
+       -478063753, 651939363,  -477095589, 651427672,  -476954289, 651359626,
+       -475950593, 650921718,  -475804605, 650864422,  -474770989, 650502744,
+       -474621127, 650456518,  -473563373, 650173094,  -473410475, 650138196,
+       -472334498, 649934610,  -472179420, 649911236,  -471091240, 649788626,
+       -470934848, 649776906,  -468860016, 649699272,  -468781602, 649697806,
+       -385876037, 649697806,  -378002432, 649078140,  -370322700, 647234400,
+       -363025943, 644211983,  -356291832, 640085314,  -350286181, 634956006,
+       -345156872, 628950354,  -341030203, 622216243,  -338007786, 614919486,
+       -336164046, 607239755,  -335544380, 599366149,  -335544380, 571247184,
+       -335426942, 571236100,  -335124952, 570833446,  -335124952, 569200164,
+       -335037864, 568650330,  -334800300, 568184084,  -334430294, 567814078,
+       -333964058, 567576517,  -333414218, 567489431,  -331787995, 567489431,
+       -331677419, 567474593,  -331368625, 567077133,  -331368503, 567070001,
+       -142068459, 567070001,  -136247086, 566711605,  -136220070, 566848475,
+       -135783414, 567098791,  -135024220, 567004957,  -134451560, 566929159,
+       -134217752, 566913755,  -133983942, 566929159,  -133411282, 567004957,
+       -132665482, 567097135,  -132530294, 567091859,  -132196038, 566715561,
+       -132195672, 566711157,  -126367045, 567070001,  -33554438, 567070001,
+       -27048611, 566647761,   -20651940, 565388127,   -14471751, 563312231,
+       -8611738, 560454902,    36793963, 534548454,    43059832, 530319881,
+       48621743, 525200596,    53354240, 519306071,    57150572, 512769270,
+       59925109, 505737634,    61615265, 498369779,    62182919, 490831896,
+       62182919, 474237629,    62300359, 474226543,    62602349, 473823889,
+       62602349, 472190590,    62689435, 471640752,    62926995, 471174516,
+       63297005, 470804506,    63763241, 470566946,    64313081, 470479860,
+       65939308, 470479860,    66049884, 470465022,    66358678, 470067562,
+       66358800, 470060430,    134217752, 470060430,   134217752, 0,
+       133598086, -7873605,    131754346, -15553337,   128731929, -22850094,
+       124605260, -29584205,   119475951, -35589856,   113470300, -40719165,
+       106736189, -44845834,   99439432, -47868251,    91759700, -49711991
+    }) };
+  double offset = -50329979.277800001, arc_tol = 5000;
+  Paths64 solution = InflatePaths(subject, offset, JoinType::Round, EndType::Polygon, 2, arc_tol);
+  OffsetQual oq = GetOffsetQuality(subject[0], solution[0], offset);
+  double smallestDist = Distance(oq.smallestInSub, oq.smallestInSol);
+  double largestDist = Distance(oq.largestInSub, oq.largestInSol);
+  const double rounding_tolerance = 1.0;
+  offset = std::abs(offset);
+  //std::cout << std::setprecision(0) << std::fixed;
+  //std::cout << "Expected delta           : " << offset << std::endl;
+  //std::cout << "Smallest delta           : " << smallestDist << " (" << smallestDist - offset << ")" << std::endl;
+  //std::cout << "Largest delta            : " << largestDist << " (" << largestDist - offset << ")" << std::endl;
+  //std::cout << "Coords of smallest delta : " << oq.smallestInSub << " and " << oq.smallestInSol << std::endl;
+  //std::cout << "Coords of largest delta  : " << oq.largestInSub << " and " << oq.largestInSol << std::endl;
+  //std::cout << std::endl;
+  //SvgWriter svg;
+  //SvgAddSubject(svg, subject, FillRule::NonZero);
+  //SvgAddSolution(svg, solution, FillRule::NonZero, false);
+  //std::string filename = "offset_test.svg";
+  //SvgSaveToFile(svg, filename, 800, 600, 10);
+  EXPECT_LE(offset - smallestDist - rounding_tolerance, arc_tol);
+  EXPECT_LE(largestDist - offset  - rounding_tolerance, arc_tol);
+}
+
+TEST(Clipper2Tests, TestOffsets9) // (#733)
+{
+  // solution orientations should match subject orientations UNLESS
+  // reverse_solution is set true in ClipperOffset's constructor
+  // start subject's orientation positive ...
+  Paths64 subject{ MakePath({100,100, 200,100, 200, 400, 100, 400}) };
+  Paths64 solution = InflatePaths(subject, 50, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 1);
+  EXPECT_TRUE(IsPositive(solution[0]));
+  // reversing subject's orientation should not affect delta direction
+  // (ie where positive deltas inflate).
+  std::reverse(subject[0].begin(), subject[0].end());
+  solution = InflatePaths(subject, 50, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 1);
+  EXPECT_TRUE(std::fabs(Area(solution[0])) > std::fabs(Area(subject[0])));
+  EXPECT_FALSE(IsPositive(solution[0]));
+  ClipperOffset co(2, 0, false, true); // last param. reverses solution
+  co.AddPaths(subject, JoinType::Miter, EndType::Polygon);
+  co.Execute(50, solution);
+  EXPECT_EQ(solution.size(), 1);
+  EXPECT_TRUE(std::fabs(Area(solution[0])) > std::fabs(Area(subject[0])));
+  EXPECT_TRUE(IsPositive(solution[0]));
+  // add a hole (ie has reverse orientation to outer path)
+  subject.push_back( MakePath({130,130, 170,130, 170,370, 130,370}) );
+  solution = InflatePaths(subject, 30, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 1);
+  EXPECT_FALSE(IsPositive(solution[0]));
+  co.Clear(); // should still reverse solution orientation
+  co.AddPaths(subject, JoinType::Miter, EndType::Polygon);
+  co.Execute(30, solution);
+  EXPECT_EQ(solution.size(), 1);
+  EXPECT_TRUE(std::fabs(Area(solution[0])) > std::fabs(Area(subject[0])));
+  EXPECT_TRUE(IsPositive(solution[0]));
+  solution = InflatePaths(subject, -15, JoinType::Miter, EndType::Polygon);
+  EXPECT_EQ(solution.size(), 0);
+}
+
+TEST(Clipper2Tests, TestOffsets10) // see #715
+{
+  Paths64 subjects = {
+         {{508685336, -435806096},
+          {509492982, -434729201},
+          {509615525, -434003092},
+          {509615525, 493372891},
+          {509206033, 494655198},
+          {508129138, 495462844},
+          {507403029, 495585387},
+          {-545800889, 495585387},
+          {-547083196, 495175895},
+          {-547890842, 494099000},
+          {-548013385, 493372891},
+          {-548013385, -434003092},
+          {-547603893, -435285399},
+          {-546526998, -436093045},
+          {-545800889, -436215588},
+          {507403029, -436215588}},
+         {{106954765, -62914568},
+          {106795129, -63717113},
+          {106340524, -64397478},
+          {105660159, -64852084},
+          {104857613, -65011720},
+          {104055068, -64852084},
+          {103374703, -64397478},
+          {102920097, -63717113},
+          {102760461, -62914568},
+          {102920097, -62112022},
+          {103374703, -61431657},
+          {104055068, -60977052},
+          {104857613, -60817416},
+          {105660159, -60977052},
+          {106340524, -61431657},
+          {106795129, -62112022}} };
+
+  Clipper2Lib::ClipperOffset offseter(2, 104857.61318750000);
+  Paths64 solution;
+  offseter.AddPaths(subjects, Clipper2Lib::JoinType::Round, Clipper2Lib::EndType::Polygon);
+  offseter.Execute(-2212495.6382562499, solution);
+  EXPECT_EQ(solution.size(), 2);
+}
+
